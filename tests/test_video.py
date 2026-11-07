@@ -1,11 +1,14 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 import wave
 from pathlib import Path
 
 import numpy as np
 
-from src.art import HEIGHT, WIDTH, VISUALS
+from PIL import ImageDraw
+
+from src.art import HEIGHT, WIDTH, VISUALS, cue_start, scene_image
 from src.audio import (FPS, LEAD_IN, SAMPLE_RATE, SAMPLES_PER_FRAME,
                        caption_cues, make_music, prepare_timeline, write_narration)
 from src.render import frame_at
@@ -51,6 +54,37 @@ class VideoTests(unittest.TestCase):
                 image = frame_at(scene.start_frame + relative, self.timeline, self.total_frames)
                 self.assertEqual(image.mode, 'RGB')
                 self.assertEqual(image.size, (WIDTH, HEIGHT))
+
+    def test_narration_matches_burned_in_captions(self):
+        for scene in SCENES:
+            self.assertEqual(' '.join(scene.captions), scene.narration)
+
+    def test_visuals_are_animated_without_channel_or_playback_labels(self):
+        captured = []
+        original_text = ImageDraw.ImageDraw.text
+
+        def record_text(draw, xy, text, *args, **kwargs):
+            captured.append(str(text))
+            return original_text(draw, xy, text, *args, **kwargs)
+
+        with patch.object(ImageDraw.ImageDraw, 'text', new=record_text):
+            for scene in self.timeline:
+                first = scene_image(scene, scene.duration * 0.35)
+                second = scene_image(scene, scene.duration * 0.85)
+                pixels = np.asarray(first, dtype=np.int16) - np.asarray(second, dtype=np.int16)
+                self.assertGreater(np.count_nonzero(np.abs(pixels) > 15), 3000)
+        text = ' '.join(captured).upper()
+        self.assertNotIn('SAINS OTOMOTIF', text)
+        self.assertNotRegex(text, r'\b\d{1,2}\s*/\s*\d{1,2}\b')
+        self.assertNotRegex(text, r'\b\d{1,2}:\d{2}\b')
+
+    def test_component_reveals_follow_narration(self):
+        parts = self.timeline[2]
+        impeller = cue_start(parts, 'Impeler berputar', 0)
+        turbine = cue_start(parts, 'turbin tersambung', 0)
+        stator = cue_start(parts, 'stator mengatur', 0)
+        self.assertLess(impeller, turbine)
+        self.assertLess(turbine, stator)
 
     def test_audio_tracks_are_deterministic_and_exact_length(self):
         with tempfile.TemporaryDirectory() as directory:

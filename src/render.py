@@ -4,7 +4,6 @@ import argparse
 import bisect
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 import imageio_ffmpeg
@@ -21,11 +20,10 @@ def frame_at(frame_number: int, timeline: list[TimedScene], total_frames: int) -
     index = max(0, bisect.bisect_right(starts, frame_number) - 1)
     scene = timeline[index]
     local_time = (frame_number - scene.start_frame) / FPS
-    progress = frame_number / max(1, total_frames - 1)
-    frame = scene_image(scene, local_time, progress)
+    frame = scene_image(scene, local_time)
     if index and local_time < 0.30:
         previous = timeline[index - 1]
-        last_frame = scene_image(previous, previous.duration - 1 / FPS, progress)
+        last_frame = scene_image(previous, previous.duration - 1 / FPS)
         frame = Image.blend(last_frame, frame, ease(local_time / 0.30))
     caption(frame, scene, frame_number / FPS)
     if total_frames - frame_number < FPS * 0.35:
@@ -70,18 +68,13 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
             '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart',
             '-map_metadata', '-1', '-t', f'{encode_frames / FPS:.6f}', str(output),
         ]
-        print(f'Rendering {encode_frames / FPS:.1f}s at {WIDTH}x{HEIGHT}, {FPS} fps', flush=True)
-        started = time.monotonic()
+        print('Rendering video', flush=True)
         with log.open('wb') as error_file:
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=error_file)
             try:
                 assert proc.stdin is not None
                 for number in range(encode_frames):
                     proc.stdin.write(frame_at(number, timeline, total_frames).tobytes())
-                    if (number + 1) % (FPS * 10) == 0:
-                        elapsed = time.monotonic() - started
-                        print(f'{(number + 1) / FPS:5.1f}s / {encode_frames / FPS:.1f}s '
-                              f'({(number + 1) / elapsed:.1f} fps)', flush=True)
                 proc.stdin.close()
             except (BrokenPipeError, OSError):
                 proc.kill()
@@ -95,7 +88,7 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'torque-converter.mp4')
+    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'torque-converter-upgrade.mp4')
     parser.add_argument('--sample-dir', type=Path)
     parser.add_argument('--limit', type=float)
     args = parser.parse_args()
