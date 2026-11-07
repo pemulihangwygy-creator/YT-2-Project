@@ -451,7 +451,7 @@ def visual_flow(image, time, scene):
     rotor(image,right,620,radius,BLUE,time*0.87,16)
     orbit(draw,left,620,radius+6,radius+22,time,ORANGE)
     orbit(draw,right,620,radius+6,radius+22,time*0.85,BLUE)
-    if delivery>0.08:
+    if delivery>0.65:
         path=bezier((right+radius*0.86+14,620),(right+radius+35,620),
                     (588,620),(600,620))
         arrow(draw,path,YELLOW,6,16)
