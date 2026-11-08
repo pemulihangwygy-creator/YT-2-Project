@@ -67,10 +67,12 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
             '-vf', ('scale=in_range=full:out_range=tv:out_color_matrix=bt709,'
                     'setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709'),
             '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19', '-pix_fmt', 'yuv420p',
-            '-profile:v', 'high', '-level:v', '4.2', '-color_primaries', 'bt709',
+            '-profile:v', 'high', '-level:v', '5.1', '-color_primaries', 'bt709',
             '-color_trc', 'bt709', '-colorspace', 'bt709',
             '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
-            '-map_metadata', '-1', '-t', f'{encode_frames / FPS:.6f}', str(output),
+            '-map_metadata', '-1', '-metadata',
+            'comment=Car Concept by Eric Chadwick, Darmstadt Graphics Group GmbH; modified; https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CarConcept ; CC BY 4.0 https://creativecommons.org/licenses/by/4.0/',
+            '-video_track_timescale', '18000', '-t', f'{encode_frames / FPS:.6f}', str(output),
         ]
         print('Rendering video', flush=True)
         with log.open('wb') as error_file:
@@ -92,7 +94,7 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'torque-converter-animasi-3d-1080p60.mp4')
+    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'torque-converter-3d-1080p90.mp4')
     parser.add_argument('--sample-dir', type=Path)
     parser.add_argument('--limit', type=float)
     args = parser.parse_args()

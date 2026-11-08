@@ -3,197 +3,305 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw
+from numba import njit
+from PIL import Image
 
 
 @dataclass(frozen=True)
 class Mesh:
     vertices: np.ndarray
     normals: np.ndarray
+    triangles: np.ndarray
     colors: np.ndarray
 
 
 class MeshBuilder:
     def __init__(self):
-        self.faces: list[list[tuple[float, float, float]]] = []
-        self.colors: list[tuple[float, float, float]] = []
+        self.vertices = []
+        self.normals = []
+        self.triangles = []
+        self.colors = []
 
-    def add(self, face, color):
-        self.faces.append(face)
-        self.colors.append(color)
+    def patch(self, points, color, *, periodic=False, flip=False):
+        grid = np.asarray(points, dtype=np.float32)
+        rows, columns, _ = grid.shape
+        normals = np.zeros_like(grid)
+        for row in range(rows):
+            before = (row - 1) % rows if periodic else max(0, row - 1)
+            after = (row + 1) % rows if periodic else min(rows - 1, row + 1)
+            for column in range(columns):
+                left, right = max(0, column - 1), min(columns - 1, column + 1)
+                normal = np.cross(grid[after, column] - grid[before, column],
+                                  grid[row, right] - grid[row, left])
+                normal /= np.linalg.norm(normal) + 1e-9
+                normals[row, column] = -normal if flip else normal
+        base = len(self.vertices)
+        self.vertices.extend(grid.reshape(-1, 3))
+        self.normals.extend(normals.reshape(-1, 3))
+        for row in range(rows if periodic else rows - 1):
+            next_row = (row + 1) % rows
+            for column in range(columns - 1):
+                a = base + row * columns + column
+                b = base + next_row * columns + column
+                c = base + next_row * columns + column + 1
+                d = base + row * columns + column + 1
+                self.triangles.extend(((a, b, c), (a, c, d)))
+                self.colors.extend((color, color))
 
-    def finish(self) -> Mesh:
-        vertices = np.asarray(self.faces, dtype=np.float32)
-        normals = np.cross(vertices[:, 1] - vertices[:, 0], vertices[:, 2] - vertices[:, 0])
-        normals /= np.linalg.norm(normals, axis=1)[:, None] + 1e-8
-        return Mesh(vertices, normals, np.asarray(self.colors, dtype=np.float32))
+    def lathe(self, profile, color, *, sides=80, center=(0, 0), axis='z'):
+        grid = []
+        for i in range(sides):
+            angle = math.tau * i / sides
+            ca, sa = math.cos(angle), math.sin(angle)
+            if axis == 'z':
+                grid.append([(center[0] + r * ca, center[1] + r * sa, z)
+                             for r, z in profile])
+            else:
+                grid.append([(z, center[0] + r * ca, center[1] + r * sa)
+                             for r, z in profile])
+        self.patch(grid, color, periodic=True)
+
+    def box(self, center, extent, color):
+        x, y, z = center
+        a, b, c = (n / 2 for n in extent)
+        p = [(x-a,y-b,z-c), (x+a,y-b,z-c), (x+a,y+b,z-c), (x-a,y+b,z-c),
+             (x-a,y-b,z+c), (x+a,y-b,z+c), (x+a,y+b,z+c), (x-a,y+b,z+c)]
+        for i, j, k, l in ((0,1,2,3), (4,7,6,5), (0,4,5,1),
+                           (1,5,6,2), (2,6,7,3), (3,7,4,0)):
+            self.patch(((p[i], p[l]), (p[j], p[k])), color)
+
+    def finish(self):
+        return Mesh(np.asarray(self.vertices, dtype=np.float32),
+                    np.asarray(self.normals, dtype=np.float32),
+                    np.asarray(self.triangles, dtype=np.int32),
+                    np.asarray(self.colors, dtype=np.float32))
 
 
-def radial(radius, angle, z):
-    return (radius * math.cos(angle), radius * math.sin(angle), z)
+def bolt(builder, x, y, z, radius=0.035):
+    builder.lathe([(0.0,z), (radius*0.8,z), (radius,z-0.008),
+                   (radius,z-0.024)], (171, 184, 178), sides=8, center=(x,y))
 
 
-def ring(builder, inner, outer, z, color, sides=48):
-    for i in range(sides):
-        a = math.tau * i / sides
-        b = math.tau * (i + 1) / sides
-        builder.add([radial(inner, a, z), radial(outer, a, z),
-                     radial(outer, b, z), radial(inner, b, z)], color)
-
-
-def cylinder(builder, radius, back, front, color, sides=48):
-    for i in range(sides):
-        a = math.tau * i / sides
-        b = math.tau * (i + 1) / sides
-        builder.add([radial(radius, a, back), radial(radius, b, back),
-                     radial(radius, b, front), radial(radius, a, front)], color)
-
-
-def box(builder, center, extent, color):
-    x, y, z = center
-    a, b, c = (n / 2 for n in extent)
-    p = [(x-a,y-b,z-c), (x+a,y-b,z-c), (x+a,y+b,z-c), (x-a,y+b,z-c),
-         (x-a,y-b,z+c), (x+a,y-b,z+c), (x+a,y+b,z+c), (x-a,y+b,z+c)]
-    for indexes in ((0,1,2,3), (4,7,6,5), (0,4,5,1),
-                    (1,5,6,2), (2,6,7,3), (3,7,4,0)):
-        builder.add([p[i] for i in indexes], color)
-
-
-def tube_x(builder, x0, x1, radius, y, z, color, sides=18):
-    for i in range(sides):
-        a,b=math.tau*i/sides,math.tau*(i+1)/sides
-        builder.add([(x0,y+radius*math.cos(a),z+radius*math.sin(a)),
-                     (x0,y+radius*math.cos(b),z+radius*math.sin(b)),
-                     (x1,y+radius*math.cos(b),z+radius*math.sin(b)),
-                     (x1,y+radius*math.cos(a),z+radius*math.sin(a))],color)
-
-
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=3)
 def rotor(kind: str) -> Mesh:
-    palette = {'impeller': (244, 151, 65), 'turbine': (62, 179, 218),
-               'stator': (78, 196, 141)}
+    palette = {'impeller': (208, 141, 82), 'turbine': (101, 173, 196),
+               'stator': (103, 174, 143)}
     color = palette[kind]
-    blades = 12 if kind == 'stator' else 15
-    mesh = MeshBuilder()
-    cylinder(mesh, 1.0, -0.18, 0.12, (117, 136, 139))
-    ring(mesh, 0.86, 1.0, 0.12, (191, 208, 207))
-    ring(mesh, 0.80, 0.86, 0.14, (44, 66, 74))
-    ring(mesh, 0.24, 0.80, 0.02, tuple(c * 0.58 for c in color))
-    for blade in range(blades):
-        angle = math.tau * blade / blades
-        for segment in range(5):
-            r0 = 0.25 + segment * 0.108
-            r1 = 0.25 + (segment + 1) * 0.108
-            a0 = angle + 0.34 * ((r0 - 0.25) / 0.54)
-            a1 = angle + 0.34 * ((r1 - 0.25) / 0.54)
-            width = 0.085
-            mesh.add([radial(r0,a0,0.03), radial(r1,a1,0.03),
-                      radial(r1,a1,0.21), radial(r0,a0,0.21)], color)
-            mesh.add([radial(r0,a0,0.21), radial(r1,a1,0.21),
-                      radial(r1,a1+width,0.21), radial(r0,a0+width,0.21)],
-                     tuple(min(255, c * 1.20) for c in color))
-            mesh.add([radial(r0,a0+width,0.03), radial(r1,a1+width,0.03),
-                      radial(r1,a1+width,0.21), radial(r0,a0+width,0.21)],
-                     tuple(c * 0.66 for c in color))
-    cylinder(mesh, 0.24, 0.02, 0.28, (151, 172, 173))
-    ring(mesh, 0.12, 0.24, 0.28, (218, 228, 224))
-    cylinder(mesh, 0.12, 0.20, 0.28, (57, 78, 84))
-    ring(mesh, 0.075, 0.12, 0.20, (44, 62, 70))
-    return mesh.finish()
+    count = 12 if kind == 'stator' else 16
+    b = MeshBuilder()
+    # A rounded steel rim and the bowl behind the curved vanes.
+    b.lathe([(.80,-.21), (.90,-.21), (.975,-.17), (1.,-.12),
+             (1.,.10), (.985,.14), (.94,.155), (.88,.155), (.835,.14)],
+            (158, 177, 178), sides=96)
+    b.lathe([(.18,-.07), (.38,-.06), (.68,-.07), (.84,-.10)],
+            tuple(int(v * .43) for v in color), sides=96)
+    for blade in range(count):
+        angle = math.tau * blade / count
+        for side in (0, 1):
+            surface = []
+            for step in range(13):
+                t = step / 12
+                radius = .235 + .61 * t
+                row = []
+                for height_step in range(5):
+                    h = height_step / 4
+                    curve = .36 * t**1.2 + (.14 if kind != 'stator' else -.12) * (h - .5)
+                    a = angle + curve + (.024 if side else 0)
+                    z = -.075 + .24 * h + .055 * (1 - t*t)
+                    row.append((radius * math.cos(a), radius * math.sin(a), z))
+                surface.append(row)
+            b.patch(surface, color, flip=bool(side))
+        top = []
+        for step in range(13):
+            t = step / 12
+            radius = .235 + .61 * t
+            z = -.075 + .24 + .055 * (1 - t*t)
+            a = angle + .36 * t**1.2 + (.14 if kind != 'stator' else -.12) * .5
+            top.append(((radius*math.cos(a), radius*math.sin(a), z),
+                        (radius*math.cos(a+.024), radius*math.sin(a+.024), z)))
+        b.patch(top, tuple(min(255, int(v * 1.1)) for v in color))
+    b.lathe([(.15,-.07), (.235,-.07), (.245,-.01), (.245,.19), (.23,.23),
+             (.155,.23), (.135,.21), (.135,.10)], (176, 191, 186), sides=64)
+    b.lathe([(.10,.10), (.13,.10), (.13,.215), (.10,.215)], (43, 64, 68), sides=64)
+    return b.finish()
 
 
 @lru_cache(maxsize=1)
 def converter() -> Mesh:
-    mesh = MeshBuilder()
-    outer_segments, cross_segments = 72, 24
-    major, minor = 0.57, 0.42
-    def point(a, b):
-        radius = major + minor * math.cos(b)
-        return (radius * math.cos(a), radius * math.sin(a), minor * 0.62 * math.sin(b))
-    for i in range(outer_segments):
-        a, b = math.tau * i / outer_segments, math.tau * (i + 1) / outer_segments
-        for j in range(cross_segments):
-            u, v = math.tau * j / cross_segments, math.tau * (j + 1) / cross_segments
-            mesh.add([point(a,u), point(b,u), point(b,v), point(a,v)], (169, 185, 188))
-    cylinder(mesh, 0.15, 0.0, 0.38, (141, 160, 162), 36)
-    ring(mesh, 0.07, 0.15, 0.38, (211, 225, 221), 36)
-    cylinder(mesh, 0.07, 0.31, 0.38, (44, 64, 71), 36)
-    return mesh.finish()
-
-
-@lru_cache(maxsize=1)
-def engine() -> Mesh:
-    m = MeshBuilder()
-    box(m, (0, -0.05, 0), (1.70, 0.92, 0.76), (117, 135, 138))
-    box(m, (0, 0.52, 0), (1.38, 0.28, 0.70), (170, 185, 183))
-    box(m, (0, 0.73, 0), (1.07, 0.14, 0.52), (79, 99, 103))
-    box(m, (0, 0.88, -0.05), (0.78, 0.16, 0.43), (57, 76, 80))
-    tube_x(m, -0.76, 0.76, 0.09, 0.38, 0.48, (181, 194, 190))
-    tube_x(m, -0.64, 0.64, 0.07, -0.38, 0.45, (59, 78, 82))
-    for x in (-0.63, -0.21, 0.21, 0.63):
-        box(m, (x, -0.03, 0.43), (0.25, 0.49, 0.16), (72, 94, 99))
-        box(m, (x, 0.56, 0.37), (0.20, 0.12, 0.12), (213, 220, 212))
-        box(m, (x, 0.32, 0.46), (0.13, 0.22, 0.12), (136, 158, 158))
-    box(m, (0, -0.60, 0), (1.25, 0.20, 0.65), (67, 87, 92))
-    return m.finish()
-
-
-@lru_cache(maxsize=1)
-def transmission() -> Mesh:
-    mesh = MeshBuilder()
-    sides = 28
-    stations = ((-0.92,0.58), (-0.57,0.58), (0.18,0.38), (0.67,0.29), (0.90,0.22))
-    for (x0,r0), (x1,r1) in zip(stations, stations[1:]):
-        for i in range(sides):
-            a, b = math.tau*i/sides, math.tau*(i+1)/sides
-            mesh.add([(x0,r0*math.cos(a),r0*math.sin(a)),
-                      (x0,r0*math.cos(b),r0*math.sin(b)),
-                      (x1,r1*math.cos(b),r1*math.sin(b)),
-                      (x1,r1*math.cos(a),r1*math.sin(a))], (129, 149, 151))
-    for x,r in ((-0.56,0.60),(0.15,0.40),(0.65,0.31)):
-        for i in range(sides):
-            a,b=math.tau*i/sides,math.tau*(i+1)/sides
-            mesh.add([(x-0.035,r*math.cos(a),r*math.sin(a)),
-                      (x-0.035,r*math.cos(b),r*math.sin(b)),
-                      (x+0.035,r*math.cos(b),r*math.sin(b)),
-                      (x+0.035,r*math.cos(a),r*math.sin(a))], (179, 195, 194))
-    return mesh.finish()
-
-
-def render(image: Image.Image, mesh: Mesh, x: float, y: float, radius: float,
-           spin: float = 0, yaw: float = 0.65, pitch: float = -0.16, scale: float = 1.5):
-    cz, sz = math.cos(spin), math.sin(spin)
-    cy, sy = math.cos(yaw), math.sin(yaw)
-    cp, sp = math.cos(pitch), math.sin(pitch)
-    rz = np.array(((cz,-sz,0), (sz,cz,0), (0,0,1)), dtype=np.float32)
-    ry = np.array(((cy,0,sy), (0,1,0), (-sy,0,cy)), dtype=np.float32)
-    rx = np.array(((1,0,0), (0,cp,-sp), (0,sp,cp)), dtype=np.float32)
-    rotation = rx @ ry @ rz
-    vertices = mesh.vertices @ rotation.T
-    normals = mesh.normals @ rotation.T
-    depth = vertices[:, :, 2].mean(axis=1)
-    light = np.array((-0.38, 0.55, 0.74), dtype=np.float32)
-    light /= np.linalg.norm(light)
-    strength = 0.58 + 0.56 * np.abs(normals @ light)
-    colors = np.clip(mesh.colors * strength[:, None], 0, 255).astype(np.uint8)
-    projected = np.empty((len(vertices), 4, 2), dtype=np.float32)
-    projected[:, :, 0] = (x + vertices[:, :, 0] * radius) * scale
-    projected[:, :, 1] = (y - vertices[:, :, 1] * radius) * scale
-    draw = ImageDraw.Draw(image, 'RGBA')
-    for index in np.argsort(depth):
-        draw.polygon([tuple(point) for point in projected[index]],
-                     fill=tuple(int(v) for v in colors[index]) + (255,))
+    b = MeshBuilder()
+    profile = [(.10,.43), (.16,.43), (.18,.39), (.19,.28), (.27,.26),
+               (.38,.245), (.53,.22), (.68,.18), (.80,.13), (.92,.065),
+               (.985,-.02), (1.,-.09), (.98,-.16), (.90,-.23),
+               (.75,-.27), (.55,-.31), (.32,-.33), (.17,-.33)]
+    b.lathe(profile, (160, 179, 180), sides=112)
+    b.lathe([(.975,-.055), (1.006,-.055), (1.01,-.105), (.98,-.105)],
+            (79, 99, 101), sides=112)
+    b.lathe([(.075,.43), (.075,.49), (.16,.49), (.165,.43)], (189, 204, 200), sides=72)
+    b.lathe([(.048,.43), (.075,.43), (.075,.49), (.048,.49)], (45, 62, 65), sides=72)
+    for index in range(6):
+        angle = index * math.tau / 6
+        bolt(b, .61*math.cos(angle), .61*math.sin(angle), .208, .026)
+    return b.finish()
 
 
 @lru_cache(maxsize=1)
 def clutch() -> Mesh:
-    mesh = MeshBuilder()
-    cylinder(mesh, 0.90, -0.10, 0.09, (106, 126, 130), 40)
-    ring(mesh, 0.68, 0.90, 0.09, (198, 207, 199), 40)
-    ring(mesh, 0.30, 0.68, 0.10, (153, 169, 168), 40)
-    cylinder(mesh, 0.30, 0.02, 0.21, (122, 144, 147), 32)
-    ring(mesh, 0.13, 0.30, 0.21, (210, 221, 216), 32)
-    cylinder(mesh, 0.13, 0.14, 0.21, (53, 75, 82), 32)
-    return mesh.finish()
+    b = MeshBuilder()
+    b.lathe([(.17,-.13), (.72,-.13), (.88,-.10), (.92,-.06), (.92,.07),
+             (.86,.11), (.69,.11), (.68,.15), (.25,.15)], (153, 170, 169))
+    b.lathe([(.70,.145), (.86,.145), (.86,.105), (.70,.105)], (165, 113, 70))
+    b.lathe([(.12,.14), (.24,.14), (.27,.18), (.27,.24), (.14,.24), (.12,.21)],
+            (189, 203, 197), sides=64)
+    for index in range(6):
+        angle = index*math.tau/6
+        bolt(b, .47*math.cos(angle), .47*math.sin(angle), .166, .025)
+    return b.finish()
+
+
+@lru_cache(maxsize=1)
+def engine() -> Mesh:
+    b = MeshBuilder()
+    b.box((0,-.08,0), (1.76,.82,.82), (117, 138, 138))
+    b.box((0,.46,0), (1.48,.27,.73), (163, 179, 175))
+    b.box((0,.68,-.05), (1.18,.18,.60), (58, 76, 78))
+    b.box((0,-.59,0), (1.36,.20,.70), (58, 75, 78))
+    b.lathe([(.08,-.76), (.10,-.76), (.10,.76), (.08,.76)],
+            (168, 184, 180), center=(.28,.47), axis='x', sides=32)
+    for x in (-.64,-.21,.21,.64):
+        b.box((x,-.04,.44), (.25,.50,.14), (68, 89, 92))
+        b.box((x,.45,.42), (.17,.12,.11), (211, 219, 207))
+        b.box((x,.24,.51), (.13,.20,.11), (135, 156, 151))
+    return b.finish()
+
+
+@lru_cache(maxsize=1)
+def transmission() -> Mesh:
+    b = MeshBuilder()
+    b.lathe([(.52,-.96), (.60,-.90), (.60,-.57), (.49,-.39), (.39,.12),
+             (.34,.45), (.29,.69), (.22,.91), (.15,.95)],
+            (126, 147, 148), axis='x', sides=72)
+    for x, radius in ((-.57,.61), (.12,.40), (.67,.31)):
+        b.lathe([(radius-.02,x-.035), (radius,x-.035), (radius,x+.035),
+                 (radius-.02,x+.035)], (176, 192, 188), axis='x', sides=72)
+    b.lathe([(.15,.94), (.12,.94), (.12,1.18), (.15,1.18)],
+            (160, 175, 172), axis='x', sides=48)
+    return b.finish()
+
+
+@njit(cache=True, fastmath=True)
+def _raster(points, normals, triangles, colors, out, depth):
+    height, width = depth.shape
+    for i in range(triangles.shape[0]):
+        i0, i1, i2 = triangles[i,0], triangles[i,1], triangles[i,2]
+        x0,y0,z0 = points[i0]
+        x1,y1,z1 = points[i1]
+        x2,y2,z2 = points[i2]
+        area = (x1-x0)*(y2-y0) - (y1-y0)*(x2-x0)
+        if abs(area) < .00001:
+            continue
+        min_x, max_x = max(0,int(min(x0,x1,x2))), min(width-1,int(max(x0,x1,x2))+1)
+        min_y, max_y = max(0,int(min(y0,y1,y2))), min(height-1,int(max(y0,y1,y2))+1)
+        if min_x > max_x or min_y > max_y:
+            continue
+        reciprocal = 1. / area
+        for y in range(min_y, max_y+1):
+            for x in range(min_x, max_x+1):
+                u = ((x1-x0)*(y+.5-y0) - (y1-y0)*(x+.5-x0)) * reciprocal
+                v = ((x+.5-x0)*(y2-y0) - (y+.5-y0)*(x2-x0)) * reciprocal
+                w = 1. - u - v
+                if u < 0 or v < 0 or w < 0:
+                    continue
+                z = w*z0 + v*z1 + u*z2
+                if z <= depth[y,x]:
+                    continue
+                nx = w*normals[i0,0] + v*normals[i1,0] + u*normals[i2,0]
+                ny = w*normals[i0,1] + v*normals[i1,1] + u*normals[i2,1]
+                nz = w*normals[i0,2] + v*normals[i1,2] + u*normals[i2,2]
+                inv = 1. / math.sqrt(nx*nx + ny*ny + nz*nz + 1e-8)
+                nx, ny, nz = nx*inv, ny*inv, nz*inv
+                if nz < 0:
+                    nx, ny, nz = -nx, -ny, -nz
+                key = max(0., -.35*nx + .55*ny + .76*nz)
+                fill = max(0., .65*nx - .10*ny + .75*nz)
+                specular = (max(0., -.19*nx + .30*ny + .94*nz)**34 * .49
+                            + max(0., .39*nx - .06*ny + .92*nz)**18 * .12
+                            + (1.-nz)**3 * .16) * 255
+                strength = .22 + .55*key + .16*fill
+                for channel in range(3):
+                    out[y,x,channel] = min(255, int(colors[i,channel]*strength + specular))
+                out[y,x,3] = 255
+                depth[y,x] = z
+
+
+def _camera(yaw, pitch):
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    return np.asarray(((cy,0,sy), (sp*sy,cp,-sp*cy), (-cp*sy,sp,cp*cy)), dtype=np.float32)
+
+
+def _spin(angle):
+    c, s = math.cos(angle), math.sin(angle)
+    return np.asarray(((c,-s,0), (s,c,0), (0,0,1)), dtype=np.float32)
+
+
+def _project(points, radius, center):
+    projected = points.copy()
+    perspective = 4.4 / (4.4 - points[:,2] * .42)
+    projected[:,0] = center + points[:,0] * radius * perspective
+    projected[:,1] = center - points[:,1] * radius * perspective
+    return projected
+
+
+def _draw_parts(image, parts, x, y, radius, yaw, pitch, scale):
+    radius_px = radius * scale
+    extent = max(8, int(math.ceil(radius_px * 2.7)))
+    if extent > 2200:
+        raise ValueError('Model exceeds the render budget')
+    origin_x = round(x*scale - extent/2)
+    origin_y = round(y*scale - extent/2)
+    if origin_x >= image.width or origin_y >= image.height or origin_x+extent <= 0 or origin_y+extent <= 0:
+        return
+    out = np.zeros((extent,extent,4), dtype=np.uint8)
+    depth = np.full((extent,extent), -100, dtype=np.float32)
+    camera = _camera(yaw, pitch)
+    for model, angle, center in parts:
+        spin = _spin(angle)
+        points = ((model.vertices - center) @ spin.T + center) @ camera.T
+        normals = model.normals @ spin.T @ camera.T
+        screen = _project(points, radius_px, extent/2)
+        _raster(screen.astype(np.float32), normals.astype(np.float32), model.triangles,
+                model.colors, out, depth)
+    sprite = Image.fromarray(out)
+    image.paste(sprite, (origin_x,origin_y), sprite)
+
+
+def render(image: Image.Image, model: Mesh, x: float, y: float, radius: float,
+           spin: float = 0, yaw: float = .65, pitch: float = -.16, scale: float = 1.5):
+    _draw_parts(image, [(model, spin, np.zeros(3, dtype=np.float32))],
+                x, y, radius, yaw, pitch, scale)
+
+
+@lru_cache(maxsize=2)
+def car_model(braking: bool):
+    path = Path(__file__).resolve().parent.parent / 'assets' / 'models' / 'car-concept.npz'
+    models = []
+    with np.load(path, allow_pickle=False) as data:
+        for name in ('body', 'wheel0', 'wheel1', 'wheel2', 'wheel3'):
+            colors = data[name+'_c'].copy()
+            if braking and name == 'body':
+                mask = data[name+'_brake']
+                colors[mask] = np.minimum(colors[mask] * np.array((1.4, .7, .7)), 255)
+            model = Mesh(data[name+'_v'], data[name+'_n'], data[name+'_f'], colors)
+            models.append((model, data[name+'_center']))
+    return tuple(models)
+
+
+def render_car(image: Image.Image, x: float, y: float, radius: float,
+               spin: float, braking: bool, yaw: float = -.45, pitch: float = .18, scale: float = 1.5):
+    parts = []
+    for index, (model, center) in enumerate(car_model(braking)):
+        parts.append((model, spin if index else 0, center))
+    _draw_parts(image, parts, x, y, radius, yaw, pitch, scale)

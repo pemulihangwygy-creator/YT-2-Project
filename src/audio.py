@@ -12,7 +12,7 @@ import numpy as np
 from .story import SCENES, Scene
 
 SAMPLE_RATE = 44_100
-FPS = 60
+FPS = 90
 SAMPLES_PER_FRAME = SAMPLE_RATE // FPS
 LEAD_IN = 0.22
 

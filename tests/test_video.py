@@ -9,7 +9,7 @@ import numpy as np
 from PIL import ImageDraw
 
 from src import art, geometry
-from src.art import OUTPUT_HEIGHT, OUTPUT_WIDTH, SCALE, VISUALS, cue_start, scene_image
+from src.art import OUTPUT_HEIGHT, OUTPUT_WIDTH, SCALE, VISUALS, cue_start, ramp_rotation, scene_image
 from src.audio import (FPS, LEAD_IN, SAMPLE_RATE, SAMPLES_PER_FRAME,
                        caption_cues, make_music, prepare_timeline, write_narration)
 from src.render import frame_at
@@ -56,10 +56,10 @@ class VideoTests(unittest.TestCase):
                 self.assertEqual(image.mode, 'RGB')
                 self.assertEqual(image.size, (OUTPUT_WIDTH, OUTPUT_HEIGHT))
 
-    def test_native_full_hd_and_sixty_distinct_frames_per_second(self):
+    def test_native_full_hd_and_ninety_distinct_frames_per_second(self):
         self.assertEqual((OUTPUT_WIDTH, OUTPUT_HEIGHT), (1080, 1920))
-        self.assertEqual(FPS, 60)
-        self.assertEqual(SAMPLES_PER_FRAME, 735)
+        self.assertEqual(FPS, 90)
+        self.assertEqual(SAMPLES_PER_FRAME, 490)
         scene = self.timeline[3]
         position = scene.start_frame + 4 * FPS
         first = np.asarray(frame_at(position, self.timeline, self.total_frames), dtype=np.int16)
@@ -100,7 +100,7 @@ class VideoTests(unittest.TestCase):
     def test_mechanical_motion_and_no_decorative_particles(self):
         self.assertFalse(any(name in vars(art) for name in ('particles', 'spark', 'orbit', 'ambience')))
         for kind in ('impeller', 'turbine', 'stator'):
-            self.assertGreater(np.ptp(geometry.rotor(kind).vertices[:, :, 2]), 0.35)
+            self.assertGreater(np.ptp(geometry.rotor(kind).vertices[:, 2]), 0.35)
         stopped = self.timeline[4]
         first = np.asarray(scene_image(stopped, 3), dtype=np.int16)
         second = np.asarray(scene_image(stopped, 3.5), dtype=np.int16)
@@ -109,6 +109,51 @@ class VideoTests(unittest.TestCase):
         middle = round(360*SCALE)
         self.assertGreater(np.count_nonzero(delta[y1:y2, :middle] > 5), 1000)
         self.assertEqual(np.count_nonzero(delta[y1:y2, middle:] > 5), 0)
+
+    def test_three_dimensional_depth_occlusion_and_car_parts(self):
+        points = np.array([[2,2,.1], [12,2,.1], [2,12,.1],
+                           [2,2,.8], [12,2,.8], [2,12,.8]], dtype=np.float32)
+        normals = np.tile(np.array([[0,0,1]], dtype=np.float32), (6,1))
+        faces = np.array([[3,4,5], [0,1,2]], dtype=np.int32)
+        colors = np.array([[0,0,230], [230,0,0]], dtype=np.float32)
+        out = np.zeros((16,16,4), dtype=np.uint8)
+        depth = np.full((16,16), -100, dtype=np.float32)
+        geometry._raster(points, normals, faces, colors, out, depth)
+        self.assertGreater(out[4,4,2], out[4,4,0])
+        self.assertAlmostEqual(float(depth[4,4]), .8, places=5)
+        models = geometry.car_model(False)
+        self.assertEqual(len(models), 5)
+        self.assertGreater(np.ptp(models[0][0].vertices[:, 2]), .5)
+        self.assertFalse(np.array_equal(models[1][1], models[2][1]))
+
+    def test_turbine_accelerates_smoothly_after_oil_engages(self):
+        self.assertEqual(ramp_rotation(.5, 1., 1.2, .8), 0)
+        values = [ramp_rotation(t, 1., 1.2, .8) for t in (1., 1.3, 1.6, 2.2, 3.2)]
+        self.assertEqual(values, sorted(values))
+        self.assertAlmostEqual(values[-1] - values[-2], .8, places=6)
+
+    def test_stopped_car_and_oil_flow_are_smooth(self):
+        scene = self.timeline[0]
+        stop = cue_start(scene, 'bisa berhenti', 1)
+        go = cue_start(scene, 'Tapi, begitu gas diinjak,', 3)
+        first = np.asarray(scene_image(scene, stop + (go-stop)*.3))
+        second = np.asarray(scene_image(scene, stop + (go-stop)*.7))
+        self.assertTrue(np.array_equal(first, second))
+
+        class Capture:
+            def __init__(self):
+                self.highlights = []
+            def line(self, points, fill, **kwargs):
+                if fill == (204,242,244,240):
+                    self.highlights.append(points)
+            def polygon(self, *args, **kwargs):
+                pass
+
+        path = art.bezier((0,0), (60,0), (120,80), (180,80))
+        a, b = Capture(), Capture()
+        art.fluid(a, path, 1., speed=.17)
+        art.fluid(b, path, 1. + 1/FPS, speed=.17)
+        self.assertNotEqual(a.highlights[0][0], b.highlights[0][0])
 
     def test_audio_tracks_are_deterministic_and_exact_length(self):
         with tempfile.TemporaryDirectory() as directory:
