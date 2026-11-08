@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+from functools import lru_cache
 import subprocess
 import tempfile
 from pathlib import Path
@@ -15,6 +16,11 @@ from .audio import FPS, TimedScene, make_music, prepare_timeline, write_narratio
 ROOT = Path(__file__).resolve().parent.parent
 
 
+@lru_cache(maxsize=8)
+def _transition_end(scene: TimedScene) -> Image.Image:
+    return scene_image(scene, scene.duration - 1 / FPS)
+
+
 def frame_at(frame_number: int, timeline: list[TimedScene], total_frames: int) -> Image.Image:
     starts = [scene.start_frame for scene in timeline]
     index = max(0, bisect.bisect_right(starts, frame_number) - 1)
@@ -23,7 +29,7 @@ def frame_at(frame_number: int, timeline: list[TimedScene], total_frames: int) -
     frame = scene_image(scene, local_time)
     if index and local_time < 0.30:
         previous = timeline[index - 1]
-        last_frame = scene_image(previous, previous.duration - 1 / FPS)
+        last_frame = _transition_end(previous)
         frame = Image.blend(last_frame, frame, ease(local_time / 0.30))
     caption(frame, scene, frame_number / FPS)
     if total_frames - frame_number < FPS * 0.35:
@@ -70,8 +76,7 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
             '-profile:v', 'high', '-level:v', '5.1', '-color_primaries', 'bt709',
             '-color_trc', 'bt709', '-colorspace', 'bt709',
             '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
-            '-map_metadata', '-1', '-metadata',
-            'comment=Car Concept by Eric Chadwick, Darmstadt Graphics Group GmbH; modified; https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CarConcept ; CC BY 4.0 https://creativecommons.org/licenses/by/4.0/',
+            '-map_metadata', '-1',
             '-video_track_timescale', '18000', '-t', f'{encode_frames / FPS:.6f}', str(output),
         ]
         print('Rendering video', flush=True)
@@ -94,7 +99,7 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'torque-converter-3d-1080p90.mp4')
+    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'torque-converter-2d-1080p90.mp4')
     parser.add_argument('--sample-dir', type=Path)
     parser.add_argument('--limit', type=float)
     args = parser.parse_args()

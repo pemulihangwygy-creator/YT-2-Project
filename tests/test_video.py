@@ -1,14 +1,13 @@
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 import wave
-from pathlib import Path
 
 import numpy as np
-
 from PIL import Image, ImageDraw
 
-from src import art, geometry
+from src import art, vector
 from src.art import OUTPUT_HEIGHT, OUTPUT_WIDTH, SCALE, VISUALS, cue_start, ramp_rotation, scene_image
 from src.audio import (FPS, LEAD_IN, SAMPLE_RATE, SAMPLES_PER_FRAME,
                        caption_cues, make_music, prepare_timeline, write_narration)
@@ -47,171 +46,125 @@ class VideoTests(unittest.TestCase):
                 self.assertLessEqual(end, scene.start + LEAD_IN + scene.speech_duration)
                 self.assertTrue(text.strip())
                 if i:
-                    self.assertAlmostEqual(start, cues[i - 1][1])
+                    self.assertAlmostEqual(start, cues[i-1][1])
 
     def test_every_scene_and_transition_renders(self):
         for scene in self.timeline:
-            for relative in (0, scene.frames // 2, scene.frames - 1):
-                image = frame_at(scene.start_frame + relative, self.timeline, self.total_frames)
+            for relative in (0, scene.frames//2, scene.frames-1):
+                image = frame_at(scene.start_frame+relative, self.timeline, self.total_frames)
                 self.assertEqual(image.mode, 'RGB')
                 self.assertEqual(image.size, (OUTPUT_WIDTH, OUTPUT_HEIGHT))
 
-    def test_native_full_hd_and_ninety_distinct_frames_per_second(self):
-        self.assertEqual((OUTPUT_WIDTH, OUTPUT_HEIGHT), (1080, 1920))
-        self.assertEqual(FPS, 90)
-        self.assertEqual(SAMPLES_PER_FRAME, 490)
-        scene = self.timeline[3]
-        position = scene.start_frame + 4 * FPS
-        first = np.asarray(frame_at(position, self.timeline, self.total_frames), dtype=np.int16)
-        second = np.asarray(frame_at(position + 1, self.timeline, self.total_frames), dtype=np.int16)
-        self.assertGreater(np.count_nonzero(np.abs(first - second) > 4), 1000)
+    def test_native_full_hd_and_ninety_fps(self):
+        self.assertEqual((OUTPUT_WIDTH,OUTPUT_HEIGHT),(1080,1920))
+        self.assertEqual(FPS,90)
+        self.assertEqual(SAMPLES_PER_FRAME,490)
+        scene=self.timeline[3]
+        position=scene.start_frame+5*FPS
+        first=np.asarray(frame_at(position,self.timeline,self.total_frames),dtype=np.int16)
+        second=np.asarray(frame_at(position+1,self.timeline,self.total_frames),dtype=np.int16)
+        self.assertGreater(np.count_nonzero(np.abs(first-second)>4),1000)
 
     def test_narration_matches_burned_in_captions(self):
         for scene in SCENES:
-            self.assertEqual(' '.join(scene.captions), scene.narration)
+            self.assertEqual(' '.join(scene.captions),scene.narration)
 
-    def test_visuals_are_animated_without_channel_or_playback_labels(self):
-        captured = []
-        original_text = ImageDraw.ImageDraw.text
+    def test_2d_assets_and_no_3d_dependencies(self):
+        for kind in ('impeller','turbine','stator'):
+            sprite=vector.rotor(kind)
+            self.assertIs(sprite,vector.rotor(kind))
+            self.assertEqual(sprite.mode,'RGBA')
+            self.assertEqual(sprite.size,(768,768))
+            self.assertEqual(sprite.getpixel((0,0))[3],0)
+            self.assertGreater(sprite.getpixel((384,384))[3],0)
+        self.assertFalse((ROOT/'src'/'geometry.py').exists())
+        requirements=(ROOT/'requirements.txt').read_text().lower()
+        self.assertIn('resvg-py',requirements)
+        self.assertIn('aggdraw',requirements)
+        self.assertNotIn('mitsuba',requirements)
+        self.assertNotIn('drjit',requirements)
 
-        def record_text(draw, xy, text, *args, **kwargs):
+    def test_visuals_animated_without_channel_or_playback_labels(self):
+        captured=[]
+        original_text=ImageDraw.ImageDraw.text
+        def record_text(draw,xy,text,*args,**kwargs):
             captured.append(str(text))
-            return original_text(draw, xy, text, *args, **kwargs)
-
-        with patch.object(ImageDraw.ImageDraw, 'text', new=record_text):
+            return original_text(draw,xy,text,*args,**kwargs)
+        with patch.object(ImageDraw.ImageDraw,'text',new=record_text):
             for scene in self.timeline:
-                first = scene_image(scene, scene.duration * 0.35)
-                second = scene_image(scene, scene.duration * 0.85)
-                pixels = np.asarray(first, dtype=np.int16) - np.asarray(second, dtype=np.int16)
-                self.assertGreater(np.count_nonzero(np.abs(pixels) > 15), 3000)
-        text = ' '.join(captured).upper()
-        self.assertNotIn('SAINS OTOMOTIF', text)
-        self.assertNotRegex(text, r'\b\d{1,2}\s*/\s*\d{1,2}\b')
-        self.assertNotRegex(text, r'\b\d{1,2}:\d{2}\b')
+                first=np.asarray(scene_image(scene,scene.duration*.35),dtype=np.int16)
+                second=np.asarray(scene_image(scene,scene.duration*.85),dtype=np.int16)
+                self.assertGreater(np.count_nonzero(np.abs(first-second)>15),3000)
+        text=' '.join(captured).upper()
+        self.assertNotIn('SAINS OTOMOTIF',text)
+        self.assertNotRegex(text,r'\b\d{1,2}\s*/\s*\d{1,2}\b')
+        self.assertNotRegex(text,r'\b\d{1,2}:\d{2}\b')
+        self.assertFalse(any(name in vars(art) for name in ('particles','spark','orbit','ambience')))
 
     def test_component_reveals_follow_narration(self):
-        parts = self.timeline[2]
-        impeller = cue_start(parts, 'Impeler berputar', 0)
-        turbine = cue_start(parts, 'turbin tersambung', 0)
-        stator = cue_start(parts, 'stator mengatur', 0)
-        self.assertLess(impeller, turbine)
-        self.assertLess(turbine, stator)
+        scene=self.timeline[2]
+        impeller=cue_start(scene,'Impeler berputar',0)
+        turbine=cue_start(scene,'turbin tersambung',0)
+        stator=cue_start(scene,'stator mengatur',0)
+        self.assertLess(impeller,turbine)
+        self.assertLess(turbine,stator)
 
-    def test_mechanical_motion_and_no_decorative_particles(self):
-        self.assertFalse(any(name in vars(art) for name in ('particles', 'spark', 'orbit', 'ambience')))
-        for kind in ('impeller', 'turbine', 'stator'):
-            self.assertGreater(np.ptp(geometry.rotor(kind).vertices[:, 2]), 0.35)
-        stopped = self.timeline[4]
-        first = np.asarray(scene_image(stopped, 3), dtype=np.int16)
-        second = np.asarray(scene_image(stopped, 3.5), dtype=np.int16)
-        delta = np.abs(first - second)
-        y1, y2 = round(400*SCALE), round(780*SCALE)
-        middle = round(360*SCALE)
-        self.assertGreater(np.count_nonzero(delta[y1:y2, :middle] > 5), 1000)
-        self.assertEqual(np.count_nonzero(delta[y1:y2, middle:] > 5), 0)
-
-    def test_three_dimensional_depth_occlusion_and_car_parts(self):
-        points = np.array([[2,2,.1], [12,2,.1], [2,12,.1],
-                           [2,2,.8], [12,2,.8], [2,12,.8]], dtype=np.float32)
-        normals = np.tile(np.array([[0,0,1]], dtype=np.float32), (6,1))
-        faces = np.array([[3,4,5], [0,1,2]], dtype=np.int32)
-        colors = np.array([[0,0,230], [230,0,0]], dtype=np.float32)
-        out = np.zeros((16,16,4), dtype=np.uint8)
-        depth = np.full((16,16), -100, dtype=np.float32)
-        geometry._raster(points, normals, faces, colors, out, depth, geometry.studio_reflection())
-        self.assertGreater(out[4,4,2], out[4,4,0])
-        self.assertAlmostEqual(float(depth[4,4]), .8, places=5)
-        models = geometry.car_model(False)
-        self.assertEqual(len(models), 5)
-        self.assertGreater(np.ptp(models[0][0].vertices[:, 2]), .5)
-        self.assertFalse(np.array_equal(models[1][1], models[2][1]))
-
-    def test_ray_traced_lighting_is_cached_and_used(self):
-        reflection = geometry.studio_reflection()
-        self.assertIs(reflection, geometry.studio_reflection())
-        self.assertEqual(reflection.shape, (384, 384, 3))
-        self.assertGreater(np.ptp(reflection.astype(np.int16)), 100)
-        points = np.array([[2,2,.3], [12,2,.3], [2,12,.3]], dtype=np.float32)
-        normals = np.tile(np.array([[0,0,1]], dtype=np.float32), (3,1))
-        triangles = np.array([[0,1,2]], dtype=np.int32)
-        colors = np.array([[80,80,80]], dtype=np.float32)
-        frames = []
-        for light in (np.zeros_like(reflection), np.full_like(reflection, 255)):
-            out = np.zeros((16,16,4), dtype=np.uint8)
-            depth = np.full((16,16), -100, dtype=np.float32)
-            geometry._raster(points,normals,triangles,colors,out,depth,light)
-            frames.append(out)
-        self.assertGreater(int(frames[1][4,4,0]), int(frames[0][4,4,0]))
-
-    def test_assembly_has_one_depth_buffer_and_continuous_oil(self):
-        vertices = np.array([[-1,-1,0], [1,-1,0], [0,1,0]], dtype=np.float32)
-        normals = np.tile(np.array([[0,0,1]], dtype=np.float32), (3,1))
-        triangles = np.array([[0,1,2]], dtype=np.int32)
-        def triangle(color):
-            return geometry.Mesh(vertices,normals,triangles,np.array([color],dtype=np.float32))
-        far = (triangle([0,0,220]),0,-.5,(1,1,1))
-        near = (triangle([220,0,0]),0,.5,(1,1,1))
-        images = []
-        for parts in ((far,near),(near,far)):
-            image = Image.new('RGB',(96,96))
-            geometry.render_assembly(image,parts,48,48,25,yaw=0,pitch=0,scale=1)
-            images.append(np.asarray(image))
-        self.assertTrue(np.array_equal(*images))
-        self.assertGreater(int(images[0][48,48,0]), int(images[0][48,48,2]))
-        first, second = geometry.animated_oil(0), geometry.animated_oil(1/90)
-        self.assertTrue(np.array_equal(first.vertices, second.vertices))
-        self.assertTrue(np.array_equal(first.triangles, second.triangles))
-        self.assertFalse(np.array_equal(first.colors, second.colors))
-        np.testing.assert_allclose(geometry._oil_position(0,1),
-                                   geometry._oil_position(2*np.pi,1),atol=1e-6)
-        self.assertGreater(np.ptp(first.vertices[:,2]), 1.7)
+    def test_pump_rotates_while_turbine_is_stopped(self):
+        scene=self.timeline[4]
+        first=np.asarray(scene_image(scene,3),dtype=np.int16)
+        second=np.asarray(scene_image(scene,3.5),dtype=np.int16)
+        delta=np.abs(first-second)
+        y1,y2=round(400*SCALE),round(720*SCALE)
+        middle=round(360*SCALE)
+        self.assertGreater(np.count_nonzero(delta[y1:y2,:middle]>5),1000)
+        self.assertEqual(np.count_nonzero(delta[y1:y2,middle:]>5),0)
 
     def test_turbine_accelerates_smoothly_after_oil_engages(self):
-        self.assertEqual(ramp_rotation(.5, 1., 1.2, .8), 0)
-        values = [ramp_rotation(t, 1., 1.2, .8) for t in (1., 1.3, 1.6, 2.2, 3.2)]
-        self.assertEqual(values, sorted(values))
-        self.assertAlmostEqual(values[-1] - values[-2], .8, places=6)
+        self.assertEqual(ramp_rotation(.5,1.,1.2,.8),0)
+        values=[ramp_rotation(t,1.,1.2,.8) for t in (1.,1.3,1.6,2.2,3.2)]
+        self.assertEqual(values,sorted(values))
+        self.assertAlmostEqual(values[-1]-values[-2],.8,places=6)
+
+    def test_oil_paths_show_both_directions(self):
+        paths=[]
+        def record(image,points,time,color=art.BLUE,speed=.2):
+            paths.append(points)
+        with patch.object(art,'fluid',new=record):
+            art._flow_diagram(Image.new('RGB',(OUTPUT_WIDTH,OUTPUT_HEIGHT)),2,.5)
+        self.assertEqual(len(paths),2)
+        self.assertLess(paths[0][0][0],paths[0][-1][0])
+        self.assertGreater(paths[1][0][0],paths[1][-1][0])
+        self.assertGreater(len(paths[0]),40)
 
     def test_stopped_car_and_oil_flow_are_smooth(self):
-        scene = self.timeline[0]
-        stop = cue_start(scene, 'bisa berhenti', 1)
-        go = cue_start(scene, 'Tapi, begitu gas diinjak,', 3)
-        first = np.asarray(scene_image(scene, stop + (go-stop)*.3))
-        second = np.asarray(scene_image(scene, stop + (go-stop)*.7))
-        self.assertTrue(np.array_equal(first, second))
-
-        class Capture:
-            def __init__(self):
-                self.highlights = []
-            def line(self, points, fill, **kwargs):
-                if fill == (204,242,244,240):
-                    self.highlights.append(points)
-            def polygon(self, *args, **kwargs):
-                pass
-
-        path = art.bezier((0,0), (60,0), (120,80), (180,80))
-        a, b = Capture(), Capture()
-        art.fluid(a, path, 1., speed=.17)
-        art.fluid(b, path, 1. + 1/FPS, speed=.17)
-        self.assertNotEqual(a.highlights[0][0], b.highlights[0][0])
+        scene=self.timeline[0]
+        stop=cue_start(scene,'bisa berhenti',1)
+        go=cue_start(scene,'Tapi, begitu gas diinjak,',3)
+        first=np.asarray(scene_image(scene,stop+(go-stop)*.3))
+        second=np.asarray(scene_image(scene,stop+(go-stop)*.7))
+        self.assertTrue(np.array_equal(first,second))
+        path=art.bezier((50,50),(80,20),(180,20),(210,50))
+        a=Image.new('RGB',(400,200),(0,0,0));b=a.copy()
+        art.fluid(a,path,1.,speed=.17)
+        art.fluid(b,path,1.+1/FPS,speed=.17)
+        self.assertFalse(np.array_equal(np.asarray(a),np.asarray(b)))
 
     def test_audio_tracks_are_deterministic_and_exact_length(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)
-            voice = path / 'narration.wav'
-            write_narration(voice, self.timeline, self.voices)
-            with wave.open(str(voice), 'rb') as stream:
-                self.assertEqual(stream.getframerate(), SAMPLE_RATE)
-                self.assertEqual(stream.getnframes(), self.total_frames * SAMPLES_PER_FRAME)
-            first, second = path / 'music1.wav', path / 'music2.wav'
-            make_music(first, FPS * 2)
-            make_music(second, FPS * 2)
-            self.assertEqual(first.read_bytes(), second.read_bytes())
-            with wave.open(str(first), 'rb') as stream:
-                samples = np.frombuffer(stream.readframes(stream.getnframes()), dtype='<i2')
-                self.assertEqual(len(samples), FPS * 2 * SAMPLES_PER_FRAME)
-                self.assertGreater(np.max(np.abs(samples)), 100)
-                self.assertLess(np.max(np.abs(samples)), 30000)
+            path=Path(directory)
+            voice=path/'narration.wav'
+            write_narration(voice,self.timeline,self.voices)
+            with wave.open(str(voice),'rb') as stream:
+                self.assertEqual(stream.getframerate(),SAMPLE_RATE)
+                self.assertEqual(stream.getnframes(),self.total_frames*SAMPLES_PER_FRAME)
+            first,second=path/'music1.wav',path/'music2.wav'
+            make_music(first,FPS*2);make_music(second,FPS*2)
+            self.assertEqual(first.read_bytes(),second.read_bytes())
+            with wave.open(str(first),'rb') as stream:
+                samples=np.frombuffer(stream.readframes(stream.getnframes()),dtype='<i2')
+                self.assertEqual(len(samples),FPS*2*SAMPLES_PER_FRAME)
+                self.assertGreater(np.max(np.abs(samples)),100)
+                self.assertLess(np.max(np.abs(samples)),30000)
 
 
 if __name__ == '__main__':

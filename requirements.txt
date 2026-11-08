@@ -1,8 +1,6 @@
-drjit==1.5.0
+aggdraw==1.4.1
 imageio-ffmpeg==0.8.1
-llvmlite==0.50.0
-mitsuba==3.9.1
-numba==0.68.1
 numpy==2.5.4; python_version >= "3.12"
 numpy==2.4.6; python_version < "3.12"
 Pillow==13.0.0
+resvg-py==0.5.0
