@@ -25,10 +25,10 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests
-      - run: python -m src.render --output output/torque-converter-upgrade.mp4
+      - run: python -m src.render --output output/torque-converter-1080p60.mp4
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: torque-converter-upgrade
-          path: output/torque-converter-upgrade.mp4
+          name: torque-converter-1080p60
+          path: output/torque-converter-1080p60.mp4
           if-no-files-found: error
           retention-days: 90

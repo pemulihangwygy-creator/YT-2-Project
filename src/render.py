@@ -9,7 +9,7 @@ from pathlib import Path
 import imageio_ffmpeg
 from PIL import Image
 
-from .art import HEIGHT, WIDTH, caption, ease, scene_image
+from .art import OUTPUT_HEIGHT, OUTPUT_WIDTH, caption, ease, scene_image
 from .audio import FPS, TimedScene, make_music, prepare_timeline, write_narration
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,7 +28,7 @@ def frame_at(frame_number: int, timeline: list[TimedScene], total_frames: int) -
     caption(frame, scene, frame_number / FPS)
     if total_frames - frame_number < FPS * 0.35:
         amount = (total_frames - frame_number) / (FPS * 0.35)
-        frame = Image.blend(Image.new('RGB', (WIDTH, HEIGHT), (9, 21, 28)), frame, ease(amount))
+        frame = Image.blend(Image.new('RGB', (OUTPUT_WIDTH, OUTPUT_HEIGHT), (9, 21, 28)), frame, ease(amount))
     return frame
 
 
@@ -61,11 +61,15 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
                'alimiter=limit=0.94,aformat=channel_layouts=stereo[a]')
         command = [
             ffmpeg, '-hide_banner', '-loglevel', 'warning', '-y',
-            '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', f'{WIDTH}x{HEIGHT}',
+            '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', f'{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}',
             '-framerate', str(FPS), '-i', 'pipe:0', '-i', str(speech), '-i', str(music),
             '-filter_complex', mix, '-map', '0:v:0', '-map', '[a]',
-            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
-            '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart',
+            '-vf', ('scale=in_range=full:out_range=tv:out_color_matrix=bt709,'
+                    'setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709'),
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19', '-pix_fmt', 'yuv420p',
+            '-profile:v', 'high', '-level:v', '4.2', '-color_primaries', 'bt709',
+            '-color_trc', 'bt709', '-colorspace', 'bt709',
+            '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
             '-map_metadata', '-1', '-t', f'{encode_frames / FPS:.6f}', str(output),
         ]
         print('Rendering video', flush=True)
@@ -88,7 +92,7 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'torque-converter-upgrade.mp4')
+    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'torque-converter-1080p60.mp4')
     parser.add_argument('--sample-dir', type=Path)
     parser.add_argument('--limit', type=float)
     args = parser.parse_args()

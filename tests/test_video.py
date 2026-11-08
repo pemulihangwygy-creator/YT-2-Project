@@ -8,7 +8,7 @@ import numpy as np
 
 from PIL import ImageDraw
 
-from src.art import HEIGHT, WIDTH, VISUALS, cue_start, scene_image
+from src.art import OUTPUT_HEIGHT, OUTPUT_WIDTH, VISUALS, cue_start, scene_image
 from src.audio import (FPS, LEAD_IN, SAMPLE_RATE, SAMPLES_PER_FRAME,
                        caption_cues, make_music, prepare_timeline, write_narration)
 from src.render import frame_at
@@ -53,7 +53,17 @@ class VideoTests(unittest.TestCase):
             for relative in (0, scene.frames // 2, scene.frames - 1):
                 image = frame_at(scene.start_frame + relative, self.timeline, self.total_frames)
                 self.assertEqual(image.mode, 'RGB')
-                self.assertEqual(image.size, (WIDTH, HEIGHT))
+                self.assertEqual(image.size, (OUTPUT_WIDTH, OUTPUT_HEIGHT))
+
+    def test_native_full_hd_and_sixty_distinct_frames_per_second(self):
+        self.assertEqual((OUTPUT_WIDTH, OUTPUT_HEIGHT), (1080, 1920))
+        self.assertEqual(FPS, 60)
+        self.assertEqual(SAMPLES_PER_FRAME, 735)
+        scene = self.timeline[3]
+        position = scene.start_frame + 4 * FPS
+        first = np.asarray(frame_at(position, self.timeline, self.total_frames), dtype=np.int16)
+        second = np.asarray(frame_at(position + 1, self.timeline, self.total_frames), dtype=np.int16)
+        self.assertGreater(np.count_nonzero(np.abs(first - second) > 4), 1000)
 
     def test_narration_matches_burned_in_captions(self):
         for scene in SCENES:

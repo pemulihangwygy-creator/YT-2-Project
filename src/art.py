@@ -10,6 +10,8 @@ from PIL import Image, ImageDraw, ImageFont
 from .audio import TimedScene, caption_cues
 
 WIDTH, HEIGHT = 720, 1280
+SCALE = 1.5
+OUTPUT_WIDTH, OUTPUT_HEIGHT = 1080, 1920
 ROOT = Path(__file__).resolve().parent.parent
 FONT_DIR = ROOT / 'assets' / 'fonts'
 WHITE = (247, 250, 244)
@@ -20,6 +22,51 @@ BLUE = (57, 190, 229)
 GREEN = (78, 211, 151)
 RED = (255, 97, 86)
 INK = (8, 25, 35)
+
+
+class DesignDraw:
+    def __init__(self, image: Image.Image):
+        self.draw = ImageDraw.Draw(image, 'RGBA')
+
+    @staticmethod
+    def _points(points):
+        if len(points) and isinstance(points[0], (tuple, list)):
+            return [(x * SCALE, y * SCALE) for x, y in points]
+        return tuple(value * SCALE for value in points)
+
+    @staticmethod
+    def _width(value):
+        return max(1, round(value * SCALE))
+
+    def ellipse(self, xy, fill=None, outline=None, width=1):
+        self.draw.ellipse(self._points(xy), fill=fill, outline=outline, width=self._width(width))
+
+    def rectangle(self, xy, fill=None, outline=None, width=1):
+        self.draw.rectangle(self._points(xy), fill=fill, outline=outline, width=self._width(width))
+
+    def arc(self, xy, start, end, fill=None, width=1):
+        self.draw.arc(self._points(xy), start, end, fill=fill, width=self._width(width))
+
+    def line(self, xy, fill=None, width=0, joint=None):
+        self.draw.line(self._points(xy), fill=fill, width=self._width(width), joint=joint)
+
+    def polygon(self, xy, fill=None, outline=None, width=1):
+        self.draw.polygon(self._points(xy), fill=fill, outline=outline, width=self._width(width))
+
+    def rounded_rectangle(self, xy, radius=0, fill=None, outline=None, width=1):
+        self.draw.rounded_rectangle(self._points(xy), radius=round(radius * SCALE), fill=fill,
+                                    outline=outline, width=self._width(width))
+
+    def text(self, xy, text, font=None, fill=None, anchor=None, stroke_width=0, stroke_fill=None):
+        self.draw.text(self._points(xy), text, font=font, fill=fill, anchor=anchor,
+                       stroke_width=round(stroke_width * SCALE), stroke_fill=stroke_fill)
+
+    def textlength(self, text, font=None):
+        return self.draw.textlength(text, font=font) / SCALE
+
+
+def canvas(image: Image.Image) -> DesignDraw:
+    return DesignDraw(image)
 
 
 def clamp(value: float, low: float = 0, high: float = 1) -> float:
@@ -42,7 +89,7 @@ def font(name: str, size: int) -> ImageFont.FreeTypeFont:
         'bold': 'Barlow-Bold.ttf',
         'body': 'Barlow-SemiBold.ttf',
     }
-    return ImageFont.truetype(str(FONT_DIR / names[name]), size=size)
+    return ImageFont.truetype(str(FONT_DIR / names[name]), size=round(size * SCALE))
 
 
 def fitted_font(draw, text: str, name: str, size: int, max_width: int):
@@ -78,17 +125,17 @@ def polar_ellipse(x, y, rx, ry, fraction, angle):
 
 @lru_cache(maxsize=1)
 def background() -> Image.Image:
-    x = np.linspace(-1, 1, WIDTH, dtype=np.float32)[None, :]
-    y = np.linspace(0, 1, HEIGHT, dtype=np.float32)[:, None]
+    x = np.linspace(-1, 1, OUTPUT_WIDTH, dtype=np.float32)[None, :]
+    y = np.linspace(0, 1, OUTPUT_HEIGHT, dtype=np.float32)[:, None]
     cool = np.exp(-((x / 0.85) ** 2 + ((y - 0.53) / 0.39) ** 2) * 1.3)
     warm = np.exp(-(((x + 0.82) / 0.60) ** 2 + ((y - 0.24) / 0.33) ** 2) * 1.8)
     vignette = np.clip(1 - 0.23 * x * x - 0.24 * (y - 0.48) ** 2, 0.60, 1)
-    grain = np.random.default_rng(19).normal(0, 0.8, (HEIGHT, WIDTH))
-    data = np.empty((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    grain = np.random.default_rng(19).normal(0, 0.8, (OUTPUT_HEIGHT, OUTPUT_WIDTH))
+    data = np.empty((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), dtype=np.uint8)
     for channel, (base, blue, amber) in enumerate(((9, 14, 9), (22, 27, 5), (31, 32, 1))):
         data[:, :, channel] = np.clip((base + blue * cool + amber * warm) * vignette + grain, 0, 255)
     result = Image.fromarray(data, 'RGB')
-    draw = ImageDraw.Draw(result, 'RGBA')
+    draw = canvas(result)
     for x0 in range(-140, WIDTH + 160, 76):
         draw.line((x0, 345, x0 + 230, 1045), fill=(180, 215, 214, 8), width=1)
     for y0 in range(385, 1060, 76):
@@ -96,8 +143,29 @@ def background() -> Image.Image:
     return result
 
 
+@lru_cache(maxsize=8)
+def glow_sprite(radius: int, color: tuple[int, int, int]) -> Image.Image:
+    size = round(radius * 2 * SCALE)
+    axis = np.linspace(-1, 1, size, dtype=np.float32)
+    distance = axis[None, :] ** 2 + axis[:, None] ** 2
+    alpha = np.clip(np.exp(-distance * 4.8) * 55, 0, 255).astype(np.uint8)
+    pixels = np.empty((size, size, 4), dtype=np.uint8)
+    pixels[:, :, :3] = color
+    pixels[:, :, 3] = alpha
+    return Image.fromarray(pixels, 'RGBA')
+
+
+def glow(image: Image.Image, x: float, y: float, radius: int, color: tuple[int, int, int]):
+    sprite = glow_sprite(radius, color)
+    left = round(x * SCALE - sprite.width / 2)
+    top = round(y * SCALE - sprite.height / 2)
+    image.paste(sprite, (left, top), sprite)
+
+
 def ambience(image: Image.Image, time: float):
-    draw = ImageDraw.Draw(image, 'RGBA')
+    glow(image, 145 + 20 * math.sin(time * 0.27), 584, 130, BLUE)
+    glow(image, 582 - 20 * math.sin(time * 0.23), 654, 105, ORANGE)
+    draw = canvas(image)
     cx, cy = 360, 640
     for r, phase, alpha in ((272, 0, 36), (310, 70, 27), (358, 150, 18)):
         box = (cx-r, cy-r*0.82, cx+r, cy+r*0.82)
@@ -113,7 +181,7 @@ def ambience(image: Image.Image, time: float):
 
 
 def header(image: Image.Image, scene: TimedScene, time: float):
-    draw = ImageDraw.Draw(image, 'RGBA')
+    draw = canvas(image)
     start_y = 82 if len(scene.scene.title) == 3 else 105
     for index, line in enumerate(scene.scene.title):
         appear = ease((time - index * 0.08) / 0.48)
@@ -151,7 +219,7 @@ def rotor(image: Image.Image, x: float, y: float, r: float,
           color: tuple[int, int, int], angle: float, blades: int = 15):
     if r < 20:
         return
-    draw = ImageDraw.Draw(image, 'RGBA')
+    draw = canvas(image)
     rx, ry = r * 0.86, r
     depth = max(8, r * 0.16)
     ellipse(draw, x + depth + 5, y + depth + 11, rx + 8, ry + 8, (0, 8, 13, 110))
@@ -187,6 +255,8 @@ def rotor(image: Image.Image, x: float, y: float, r: float,
         draw.line(points[1:4], fill=(*mix(color, 1.38), 220), width=max(1, round(r/90)), joint='curve')
         draw.line(points[5:7], fill=(*mix(color, 0.58), 160), width=max(1, round(r/110)), joint='curve')
 
+    ellipse(draw, x + depth*0.35, y + depth*0.25, rx*0.31, ry*0.31,
+            (25, 42, 50, 255), (185, 210, 207, 235), max(2, round(r/70)))
     for scale, fill, outline in ((0.295, (27, 45, 52, 255), (*WHITE, 245)),
                                   (0.245, (133, 157, 160, 255), (55, 78, 87, 255)),
                                   (0.175, (47, 69, 76, 255), (194, 214, 209, 235)),
@@ -199,6 +269,90 @@ def rotor(image: Image.Image, x: float, y: float, r: float,
         bx, by = polar_ellipse(x, y, rx, ry, 0.925, angle + n * math.tau / 8)
         disc(draw, bx, by, max(2, r*0.017), (28, 44, 49, 255))
         disc(draw, bx-r*0.004, by-r*0.004, max(1, r*0.006), (197, 210, 205, 230))
+
+
+@lru_cache(maxsize=1)
+def shell_master() -> Image.Image:
+    size = 768
+    axis = np.linspace(-1.04, 1.04, size, dtype=np.float32)
+    xx, yy = np.meshgrid(axis, axis)
+    ex = xx / 0.86
+    radial = np.sqrt(ex * ex + yy * yy) + 1e-7
+    u = (radial - 0.54) / 0.44
+    height = np.sqrt(np.clip(1.0 - u * u, 0, 1))
+    nx = np.clip(u, -1, 1) * ex / radial
+    ny = np.clip(u, -1, 1) * yy / radial
+    light = np.clip(-0.37 * nx - 0.50 * ny + 0.78 * height, 0, 1)
+    shine = np.clip(-0.23 * nx - 0.36 * ny + 0.90 * height, 0, 1) ** 24
+    reflected = (0.5 + 0.5 * np.cos(5.8 * nx - 2.5 * ny + height * 3.8)) * height
+    brush = np.sin(radial * 2500 + np.arctan2(yy, ex) * 8) * 1.9
+    value = np.clip(34 + 111 * light + 65 * shine + 30 * reflected + brush, 0, 255)
+    mask = np.clip((1 - np.abs(u)) * 34, 0, 1)
+    rgba = np.empty((size, size, 4), dtype=np.uint8)
+    rgba[:, :, 0] = np.clip(value * 0.91, 0, 255).astype(np.uint8)
+    rgba[:, :, 1] = np.clip(value * 0.98, 0, 255).astype(np.uint8)
+    rgba[:, :, 2] = np.clip(value * 1.02 + 4, 0, 255).astype(np.uint8)
+    rgba[:, :, 3] = (mask * 255).astype(np.uint8)
+    return Image.fromarray(rgba, 'RGBA')
+
+
+@lru_cache(maxsize=96)
+def sized_shell(size: int) -> Image.Image:
+    return shell_master().resize((size, size), Image.Resampling.LANCZOS)
+
+
+def converter_shell(image: Image.Image, x: float, y: float, radius: float, time: float):
+    if radius < 15:
+        return
+    draw = canvas(image)
+    ellipse(draw, x + radius*0.10, y + radius*0.12, radius*0.88, radius*1.02,
+            fill=(0, 9, 15, 115))
+    size = max(16, round((radius * 2 * SCALE) / 4) * 4)
+    sprite = sized_shell(size)
+    image.paste(sprite, (round(x*SCALE-size/2), round(y*SCALE-size/2)), sprite)
+    rx, ry = radius*0.83, radius*0.97
+    ellipse(draw, x, y, rx, ry, outline=(221, 238, 232, 210), width=max(2, radius/85))
+    ellipse(draw, x, y, rx*0.80, ry*0.80, outline=(28, 46, 53, 130), width=max(2, radius/100))
+    ellipse(draw, x, y, rx*0.76, ry*0.76, outline=(210, 224, 215, 105), width=max(1, radius/140))
+    outer=(x-rx*0.95,y-ry*0.95,x+rx*0.95,y+ry*0.95)
+    draw.arc(outer, 205, 310, fill=(255, 255, 243, 180), width=max(2, radius/65))
+    for n in range(10):
+        a = time*0.45 + n*math.tau/10
+        bx, by = polar_ellipse(x, y, rx, ry, 0.88, a)
+        disc(draw, bx, by, max(2.2, radius*0.018), (29, 43, 48, 255))
+        disc(draw, bx-radius*0.005, by-radius*0.006, max(1, radius*0.006), (225, 233, 224, 230))
+    ellipse(draw,x+radius*0.03,y+radius*0.025,rx*0.22,ry*0.22,
+            (30,48,55,255),(233,244,235,240),max(2,radius/65))
+    ellipse(draw,x,y,rx*0.19,ry*0.19,(154,176,173,255),(41,62,69,255),max(2,radius/75))
+    ellipse(draw,x,y,rx*0.105,ry*0.105,(16,36,44,255),(195,215,207,220),max(1,radius/110))
+
+
+def cityscape(image: Image.Image, time: float, movement: float = 1.0):
+    draw = canvas(image)
+    for layer in (0, 1):
+        spacing = 83 if layer == 0 else 112
+        shift = (time * (5 if layer == 0 else 12) * movement) % spacing
+        base = 795 if layer == 0 else 830
+        for n in range(-2, 11):
+            x = n*spacing - shift
+            height = 100 + ((n*53 + layer*71) % 126)
+            width = spacing - 15 + ((n*13) % 10)
+            tone = (85, 139, 148, 22) if layer == 0 else (74, 119, 129, 34)
+            draw.rectangle((x,base-height,x+width,base),fill=tone)
+            for row in range(2, 6):
+                for column in range(1, 3):
+                    if (n + row + column) % 3 == 0:
+                        wx=x+column*21
+                        wy=base-height+row*20
+                        if wy<base-8:
+                            draw.rectangle((wx,wy,wx+4,wy+8),fill=(255,210,120,35))
+
+
+def fluid_stream(draw, points, time, color=BLUE, count=7, speed=0.18):
+    draw.line(points, fill=(*color, 22), width=23, joint='curve')
+    draw.line(points, fill=(*color, 50), width=13, joint='curve')
+    arrow(draw, points, color, 7, 21)
+    particles(draw, points, time, WHITE, count, speed)
 
 
 def arrow(draw, points, color=BLUE, width=8, tip=20):
@@ -252,7 +406,7 @@ def orbit(draw, x, y, rx, ry, time, color=BLUE):
 
 
 def engine(image, x, y, size, time):
-    draw = ImageDraw.Draw(image, 'RGBA')
+    draw = canvas(image)
     s = size / 150
     def xy(a, b): return (x+a*s, y+b*s)
     draw.rounded_rectangle((*xy(-65, -29), *xy(64, 58)), radius=int(14*s),
@@ -275,7 +429,7 @@ def engine(image, x, y, size, time):
 
 
 def gearbox(image, x, y, size):
-    draw = ImageDraw.Draw(image, 'RGBA')
+    draw = canvas(image)
     s = size / 150
     def xy(a,b): return (x+a*s, y+b*s)
     points=[xy(-70,-44),xy(-30,-56),xy(35,-45),xy(62,-25),
@@ -290,7 +444,7 @@ def gearbox(image, x, y, size):
 
 
 def car(image, x, y, width, time, braking=False):
-    draw = ImageDraw.Draw(image, 'RGBA')
+    draw = canvas(image)
     s = width/500
     def xy(a,b): return (x+a*s, y+b*s)
     def r(a): return a*s
@@ -344,10 +498,11 @@ def cue_start(scene: TimedScene, needle: str, default: float) -> float:
 
 
 def visual_intro(image, time, scene):
-    draw=ImageDraw.Draw(image,'RGBA')
+    draw=canvas(image)
     reveal_start=cue_start(scene,'Rahasianya',scene.duration*0.55)
     reveal=ease((time-reveal_start)/0.65)
     if reveal < 0.98:
+        cityscape(image, time, 0.35 if time > 1.3 else 1.0)
         road(draw, 838+reveal*70, 0)
         shift=70*(1-ease(time/1.3))
         car(image, 100-shift, 636+reveal*190, 520*(1-reveal*0.16), min(time,1.3), braking=time>1.3)
@@ -357,7 +512,7 @@ def visual_intro(image, time, scene):
     if reveal>0:
         r=205*reveal
         orbit(draw,360,630,r+34,(r+34)*0.91,time,YELLOW)
-        rotor(image,360,630,r,(161,181,184),time*0.65,18)
+        converter_shell(image,360,630,r,time)
         if reveal>0.55:
             capsule(draw,(360,914),'TORQUE CONVERTER',YELLOW,INK,25,25,48)
             spark(draw,155,481,9,YELLOW)
@@ -365,7 +520,7 @@ def visual_intro(image, time, scene):
 
 
 def visual_connection(image, time, scene):
-    draw=ImageDraw.Draw(image,'RGBA')
+    draw=canvas(image)
     enter=ease(time/0.75)
     focus=ease((time-cue_start(scene,'Uniknya, tenaga dikirim',scene.duration*0.5))/0.8)
     left=118-55*(1-enter)-260*focus
@@ -388,7 +543,10 @@ def visual_connection(image, time, scene):
                        math.radians(135+time*22))
         arrow(draw,oil,BLUE,6,17)
         particles(draw,oil,time,WHITE,3,0.22)
-    rotor(image,360,y,radius,(157,180,183),time*0.85,18)
+    converter_shell(image,360,y,radius,time)
+    internal=ease((focus-0.25)/0.55)
+    if internal>0.04:
+        rotor(image,360,y,radius*0.79*internal,(97,168,190),time*0.85,18)
     for x,text in ((left,'MESIN'),(360,'TORCON'),(right,'TRANSMISI')):
         if 50<x<670:
             centered(draw,(x,818+28*focus),text,'display',36,WHITE,max_width=190)
@@ -396,7 +554,7 @@ def visual_connection(image, time, scene):
 
 
 def visual_parts(image, time, scene):
-    draw=ImageDraw.Draw(image,'RGBA')
+    draw=canvas(image)
     reveal_start=cue_start(scene,'Impeler berputar',scene.duration*0.25)
     unfold=ease((time-reveal_start+0.35)/0.75)
     if unfold<0.95:
@@ -436,17 +594,15 @@ def visual_parts(image, time, scene):
 
 
 def visual_flow(image, time, scene):
-    draw=ImageDraw.Draw(image,'RGBA')
+    draw=canvas(image)
     delivery=ease((time-cue_start(scene,'lalu tenaga diteruskan',scene.duration*0.7)+0.3)/1.0)
     left=185-60*delivery
     right=535-120*delivery
     radius=136-22*delivery
     upper=bezier((left-48,522),(left-32,370),(right+32,370),(right+48,522))
     lower=bezier((right+48,722),(right+32,870),(left-32,870),(left-48,722))
-    arrow(draw,upper,BLUE,8,21)
-    arrow(draw,lower,(112,211,225),7,19)
-    particles(draw,upper,time,WHITE,7,0.18)
-    particles(draw,lower,time+0.8,BLUE,6,0.13)
+    fluid_stream(draw,upper,time,BLUE,8,0.18)
+    fluid_stream(draw,lower,time+0.8,(112,211,225),7,0.13)
     rotor(image,left,620,radius,ORANGE,time*1.15,16)
     rotor(image,right,620,radius,BLUE,time*0.87,16)
     orbit(draw,left,620,radius+6,radius+22,time,ORANGE)
@@ -466,7 +622,7 @@ def visual_flow(image, time, scene):
 
 
 def visual_idle(image, time, scene):
-    draw=ImageDraw.Draw(image,'RGBA')
+    draw=canvas(image)
     pulse=0.5+0.5*math.sin(time*3)
     ellipse(draw,360,401,142+5*pulse,32+3*pulse,fill=(*RED,30))
     capsule(draw,(360,401),'REM DIINJAK',RED,WHITE,23,24,44)
@@ -490,7 +646,7 @@ def arc_points(x,y,rx,ry,start,end,count=35):
 
 
 def visual_stator(image, time, scene):
-    draw=ImageDraw.Draw(image,'RGBA')
+    draw=canvas(image)
     boost=ease((time-cue_start(scene,'sehingga tarikan awal',scene.duration*0.7)+0.2)/0.9)
     cy=590-85*boost
     r=164-48*boost+4*math.sin(time*0.9)
@@ -519,7 +675,7 @@ def visual_stator(image, time, scene):
 
 
 def visual_lockup(image, time, scene):
-    draw=ImageDraw.Draw(image,'RGBA')
+    draw=canvas(image)
     lock_start=cue_start(scene,'kopling pengunci',scene.duration*0.3)
     close=ease((time-lock_start+0.35)/1.2)
     left=195+close*45
@@ -541,10 +697,11 @@ def visual_lockup(image, time, scene):
 
 
 def visual_outro(image,time,scene):
-    draw=ImageDraw.Draw(image,'RGBA')
+    draw=canvas(image)
     orbit(draw,360,495,134,139,time,YELLOW)
-    rotor(image,360,495,105,(154,181,183),time*0.8,17)
+    converter_shell(image,360,495,105,time)
     capsule(draw,(360,670),'MESIN  >  TORCON  >  TRANSMISI',YELLOW,INK,20,19,42)
+    cityscape(image,time,1.0)
     road(draw,935,time)
     for n in range(5):
         x=(120+n*103-time*130)%600
@@ -590,7 +747,7 @@ def caption(image: Image.Image, scene: TimedScene, absolute_time: float):
     if not current:
         return
     start,end,phrase=current
-    draw=ImageDraw.Draw(image,'RGBA')
+    draw=canvas(image)
     face=fitted_font(draw,phrase,'bold',38,590)
     width=draw.textlength(phrase,font=face)
     left=(WIDTH-width)/2
