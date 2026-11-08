@@ -67,15 +67,17 @@ def speech_landmarks(voice: np.ndarray) -> tuple[float, float, tuple[float, ...]
     return speech_start, speech_end, pauses
 
 
-def prepare_timeline(voice_dir: Path) -> tuple[list[TimedScene], list[np.ndarray]]:
+def prepare_timeline(voice_dir: Path, scenes: tuple[Scene, ...] = SCENES) -> tuple[list[TimedScene], list[np.ndarray]]:
+    if not scenes:
+        raise ValueError('At least one scene is required')
     timed = []
     voices = []
     start_frame = 0
-    for index, scene in enumerate(SCENES):
+    for index, scene in enumerate(scenes):
         voice = decode_voice(voice_dir / scene.audio)
         if not voice.size:
             raise ValueError(f'Empty narration: {scene.audio}')
-        tail = 1.20 if index == len(SCENES) - 1 else 0.38
+        tail = 1.20 if index == len(scenes) - 1 else 0.38
         frames = math.ceil((LEAD_IN + len(voice) / SAMPLE_RATE + tail) * FPS)
         speech_start, speech_end, pauses = speech_landmarks(voice)
         timed.append(TimedScene(scene, index, start_frame, frames, len(voice),

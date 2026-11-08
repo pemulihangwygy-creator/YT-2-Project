@@ -47,21 +47,23 @@ def sample_frames(directory: Path, timeline: list[TimedScene]) -> None:
     print(f'Saved {len(timeline)} sample frames to {directory}', flush=True)
 
 
-def render(output: Path, timeline: list[TimedScene], voices, limit: float | None) -> None:
+def render(output: Path, timeline: list[TimedScene], voices, limit: float | None,
+           *, frame_renderer=frame_at, source_comment: str | None = None,
+           voice_gain: float = 1.0) -> None:
     total_frames = timeline[-1].start_frame + timeline[-1].frames
     encode_frames = min(total_frames, round(limit * FPS)) if limit else total_frames
     if encode_frames <= 0:
         raise ValueError('Duration must be positive')
     output.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    with tempfile.TemporaryDirectory(prefix='torcon-video-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='short-video-') as tmp:
         tmp_path = Path(tmp)
         speech = tmp_path / 'speech.wav'
         music = tmp_path / 'music.wav'
         log = tmp_path / 'ffmpeg.log'
         write_narration(speech, timeline, voices)
         make_music(music, total_frames)
-        mix = ('[1:a]highpass=f=80,lowpass=f=14500,volume=1.0[voice];'
+        mix = (f'[1:a]highpass=f=80,lowpass=f=14500,volume={voice_gain:.3f}[voice];'
                '[2:a]volume=0.34[music];'
                '[voice][music]amix=inputs=2:duration=first:normalize=0,'
                'alimiter=limit=0.94,aformat=channel_layouts=stereo[a]')
@@ -77,6 +79,7 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
             '-color_trc', 'bt709', '-colorspace', 'bt709',
             '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
             '-map_metadata', '-1',
+            *(['-metadata', f'comment={source_comment}'] if source_comment else []),
             '-video_track_timescale', '18000', '-t', f'{encode_frames / FPS:.6f}', str(output),
         ]
         print('Rendering video', flush=True)
@@ -85,7 +88,7 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
             try:
                 assert proc.stdin is not None
                 for number in range(encode_frames):
-                    proc.stdin.write(frame_at(number, timeline, total_frames).tobytes())
+                    proc.stdin.write(frame_renderer(number, timeline, total_frames).tobytes())
                 proc.stdin.close()
             except (BrokenPipeError, OSError):
                 proc.kill()
