@@ -9,6 +9,8 @@ import numpy as np
 from numba import njit
 from PIL import Image
 
+from .lighting import studio_reflection
+
 
 @dataclass(frozen=True)
 class Mesh:
@@ -93,10 +95,10 @@ def rotor(kind: str) -> Mesh:
     count = 12 if kind == 'stator' else 16
     b = MeshBuilder()
     # A rounded steel rim and the bowl behind the curved vanes.
-    b.lathe([(.80,-.21), (.90,-.21), (.975,-.17), (1.,-.12),
-             (1.,.10), (.985,.14), (.94,.155), (.88,.155), (.835,.14)],
+    b.lathe([(.88,-.21), (.94,-.20), (.985,-.17), (1.,-.12),
+             (1.,.10), (.985,.14), (.95,.155), (.92,.155), (.89,.14)],
             (158, 177, 178), sides=96)
-    b.lathe([(.18,-.07), (.38,-.06), (.68,-.07), (.84,-.10)],
+    b.lathe([(.18,-.07), (.38,-.06), (.70,-.07), (.90,-.10)],
             tuple(int(v * .43) for v in color), sides=96)
     for blade in range(count):
         angle = math.tau * blade / count
@@ -104,7 +106,7 @@ def rotor(kind: str) -> Mesh:
             surface = []
             for step in range(13):
                 t = step / 12
-                radius = .235 + .61 * t
+                radius = .235 + .665 * t
                 row = []
                 for height_step in range(5):
                     h = height_step / 4
@@ -117,7 +119,7 @@ def rotor(kind: str) -> Mesh:
         top = []
         for step in range(13):
             t = step / 12
-            radius = .235 + .61 * t
+            radius = .235 + .665 * t
             z = -.075 + .24 + .055 * (1 - t*t)
             a = angle + .36 * t**1.2 + (.14 if kind != 'stator' else -.12) * .5
             top.append(((radius*math.cos(a), radius*math.sin(a), z),
@@ -161,6 +163,68 @@ def clutch() -> Mesh:
     return b.finish()
 
 
+def _oil_position(angle, sign):
+    return np.asarray((-.55, sign*(.60 + .39*math.cos(angle)), .90*math.sin(angle)), dtype=np.float32)
+
+
+def _oil_frame(angle, sign):
+    tangent = np.asarray((0, -sign*.39*math.sin(angle), .90*math.cos(angle)), dtype=np.float32)
+    tangent /= np.linalg.norm(tangent) + 1e-8
+    across = np.asarray((1,0,0), dtype=np.float32)
+    normal = np.cross(tangent, across)
+    normal /= np.linalg.norm(normal) + 1e-8
+    return tangent, across, normal
+
+
+@lru_cache(maxsize=1)
+def oil_loop() -> Mesh:
+    # Two continuous closed cross-section paths show the recirculating oil.
+    # These are solid flow ribbons, not detached decorative particles.
+    b = MeshBuilder()
+    segments, sides = 72, 8
+    for sign in (1, -1):
+        grid = []
+        for segment in range(segments):
+            a = math.tau*segment/segments
+            point = _oil_position(a, sign)
+            _, across, normal = _oil_frame(a, sign)
+            row = []
+            for side in range(sides+1):
+                theta = math.tau*side/sides
+                xyz = point + .038*(math.cos(theta)*across + math.sin(theta)*normal)
+                row.append(tuple(xyz))
+            grid.append(row)
+        b.patch(grid, (44,167,197), periodic=True)
+    for sign in (1, -1):
+        for fraction in (.18,.68):
+            angle = math.tau*fraction
+            point = _oil_position(angle, sign)
+            tangent, across, normal = _oil_frame(angle, sign)
+            cone = []
+            for side in range(sides):
+                theta = math.tau*side/sides
+                radial = math.cos(theta)*across + math.sin(theta)*normal
+                cone.append((tuple(point - tangent*.045 + radial*.080),
+                             tuple(point + tangent*.070 + radial*.001)))
+            b.patch(cone, (90,211,226), periodic=True)
+    return b.finish()
+
+
+def animated_oil(time: float) -> Mesh:
+    source = oil_loop()
+    colors = source.colors.copy()
+    sides, segments = 8, 72
+    faces_per_loop = sides*2*segments
+    fractions = np.repeat(np.arange(segments, dtype=np.float32)/segments, sides*2)
+    for loop in range(2):
+        wave = (.5 + .5*np.cos(math.tau*(fractions-time*.24)))**6
+        factor = .75 + .55*wave
+        start = loop*faces_per_loop
+        colors[start:start+faces_per_loop] *= factor[:,None]
+    np.clip(colors, 0, 255, out=colors)
+    return Mesh(source.vertices, source.normals, source.triangles, colors)
+
+
 @lru_cache(maxsize=1)
 def engine() -> Mesh:
     b = MeshBuilder()
@@ -192,8 +256,9 @@ def transmission() -> Mesh:
 
 
 @njit(cache=True, fastmath=True)
-def _raster(points, normals, triangles, colors, out, depth):
+def _raster(points, normals, triangles, colors, out, depth, reflection):
     height, width = depth.shape
+    map_h, map_w, _ = reflection.shape
     for i in range(triangles.shape[0]):
         i0, i1, i2 = triangles[i,0], triangles[i,1], triangles[i,2]
         x0,y0,z0 = points[i0]
@@ -226,12 +291,18 @@ def _raster(points, normals, triangles, colors, out, depth):
                     nx, ny, nz = -nx, -ny, -nz
                 key = max(0., -.35*nx + .55*ny + .76*nz)
                 fill = max(0., .65*nx - .10*ny + .75*nz)
-                specular = (max(0., -.19*nx + .30*ny + .94*nz)**34 * .49
-                            + max(0., .39*nx - .06*ny + .92*nz)**18 * .12
-                            + (1.-nz)**3 * .16) * 255
-                strength = .22 + .55*key + .16*fill
+                strength = .29 + .45*key + .16*fill
+                map_x = (nx*.49 + .5) * (map_w-1)
+                map_y = (.5 - ny*.49) * (map_h-1)
+                ix = max(0, min(map_w-2, int(map_x)))
+                iy = max(0, min(map_h-2, int(map_y)))
+                fx, fy = map_x-ix, map_y-iy
                 for channel in range(3):
-                    out[y,x,channel] = min(255, int(colors[i,channel]*strength + specular))
+                    top = (1-fx)*reflection[iy,ix,channel] + fx*reflection[iy,ix+1,channel]
+                    bottom = (1-fx)*reflection[iy+1,ix,channel] + fx*reflection[iy+1,ix+1,channel]
+                    reflected = top*(1-fy) + bottom*fy
+                    value = colors[i,channel]*strength + max(0., reflected-75)*.70
+                    out[y,x,channel] = min(255, int(value))
                 out[y,x,3] = 255
                 depth[y,x] = z
 
@@ -273,7 +344,7 @@ def _draw_parts(image, parts, x, y, radius, yaw, pitch, scale):
         normals = model.normals @ spin.T @ camera.T
         screen = _project(points, radius_px, extent/2)
         _raster(screen.astype(np.float32), normals.astype(np.float32), model.triangles,
-                model.colors, out, depth)
+                model.colors, out, depth, studio_reflection())
     sprite = Image.fromarray(out)
     image.paste(sprite, (origin_x,origin_y), sprite)
 
@@ -282,6 +353,35 @@ def render(image: Image.Image, model: Mesh, x: float, y: float, radius: float,
            spin: float = 0, yaw: float = .65, pitch: float = -.16, scale: float = 1.5):
     _draw_parts(image, [(model, spin, np.zeros(3, dtype=np.float32))],
                 x, y, radius, yaw, pitch, scale)
+
+
+def render_assembly(image: Image.Image, parts, x: float, y: float, radius: float,
+                    yaw: float = 1.14, pitch: float = .12, scale: float = 1.5):
+    """Render independently animated coaxial parts into one 3D depth buffer."""
+    radius_px = radius * scale
+    height = max(8, int(math.ceil(radius_px * 2.9)))
+    origin_y = round(y*scale - height/2)
+    if origin_y >= image.height or origin_y + height <= 0:
+        return
+    out = np.zeros((height,image.width,4), dtype=np.uint8)
+    depth = np.full((height,image.width), -100, dtype=np.float32)
+    camera = _camera(yaw, pitch)
+    reflection = studio_reflection()
+    for model, angle, z_offset, dimensions in parts:
+        dimensions = np.asarray(dimensions, dtype=np.float32)
+        spin = _spin(angle)
+        points = (model.vertices * dimensions) @ spin.T
+        points[:,2] += z_offset
+        points = points @ camera.T
+        normals = (model.normals / dimensions) @ spin.T @ camera.T
+        perspective = 4.4 / (4.4 - points[:,2] * .42)
+        screen = points.copy()
+        screen[:,0] = x*scale + points[:,0] * radius_px * perspective
+        screen[:,1] = height/2 - points[:,1] * radius_px * perspective
+        _raster(screen.astype(np.float32), normals.astype(np.float32), model.triangles,
+                model.colors, out, depth, reflection)
+    sprite = Image.fromarray(out)
+    image.paste(sprite, (0,origin_y), sprite)
 
 
 @lru_cache(maxsize=2)

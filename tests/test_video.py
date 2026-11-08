@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from PIL import ImageDraw
+from PIL import Image, ImageDraw
 
 from src import art, geometry
 from src.art import OUTPUT_HEIGHT, OUTPUT_WIDTH, SCALE, VISUALS, cue_start, ramp_rotation, scene_image
@@ -118,13 +118,53 @@ class VideoTests(unittest.TestCase):
         colors = np.array([[0,0,230], [230,0,0]], dtype=np.float32)
         out = np.zeros((16,16,4), dtype=np.uint8)
         depth = np.full((16,16), -100, dtype=np.float32)
-        geometry._raster(points, normals, faces, colors, out, depth)
+        geometry._raster(points, normals, faces, colors, out, depth, geometry.studio_reflection())
         self.assertGreater(out[4,4,2], out[4,4,0])
         self.assertAlmostEqual(float(depth[4,4]), .8, places=5)
         models = geometry.car_model(False)
         self.assertEqual(len(models), 5)
         self.assertGreater(np.ptp(models[0][0].vertices[:, 2]), .5)
         self.assertFalse(np.array_equal(models[1][1], models[2][1]))
+
+    def test_ray_traced_lighting_is_cached_and_used(self):
+        reflection = geometry.studio_reflection()
+        self.assertIs(reflection, geometry.studio_reflection())
+        self.assertEqual(reflection.shape, (384, 384, 3))
+        self.assertGreater(np.ptp(reflection.astype(np.int16)), 100)
+        points = np.array([[2,2,.3], [12,2,.3], [2,12,.3]], dtype=np.float32)
+        normals = np.tile(np.array([[0,0,1]], dtype=np.float32), (3,1))
+        triangles = np.array([[0,1,2]], dtype=np.int32)
+        colors = np.array([[80,80,80]], dtype=np.float32)
+        frames = []
+        for light in (np.zeros_like(reflection), np.full_like(reflection, 255)):
+            out = np.zeros((16,16,4), dtype=np.uint8)
+            depth = np.full((16,16), -100, dtype=np.float32)
+            geometry._raster(points,normals,triangles,colors,out,depth,light)
+            frames.append(out)
+        self.assertGreater(int(frames[1][4,4,0]), int(frames[0][4,4,0]))
+
+    def test_assembly_has_one_depth_buffer_and_continuous_oil(self):
+        vertices = np.array([[-1,-1,0], [1,-1,0], [0,1,0]], dtype=np.float32)
+        normals = np.tile(np.array([[0,0,1]], dtype=np.float32), (3,1))
+        triangles = np.array([[0,1,2]], dtype=np.int32)
+        def triangle(color):
+            return geometry.Mesh(vertices,normals,triangles,np.array([color],dtype=np.float32))
+        far = (triangle([0,0,220]),0,-.5,(1,1,1))
+        near = (triangle([220,0,0]),0,.5,(1,1,1))
+        images = []
+        for parts in ((far,near),(near,far)):
+            image = Image.new('RGB',(96,96))
+            geometry.render_assembly(image,parts,48,48,25,yaw=0,pitch=0,scale=1)
+            images.append(np.asarray(image))
+        self.assertTrue(np.array_equal(*images))
+        self.assertGreater(int(images[0][48,48,0]), int(images[0][48,48,2]))
+        first, second = geometry.animated_oil(0), geometry.animated_oil(1/90)
+        self.assertTrue(np.array_equal(first.vertices, second.vertices))
+        self.assertTrue(np.array_equal(first.triangles, second.triangles))
+        self.assertFalse(np.array_equal(first.colors, second.colors))
+        np.testing.assert_allclose(geometry._oil_position(0,1),
+                                   geometry._oil_position(2*np.pi,1),atol=1e-6)
+        self.assertGreater(np.ptp(first.vertices[:,2]), 1.7)
 
     def test_turbine_accelerates_smoothly_after_oil_engages(self):
         self.assertEqual(ramp_rotation(.5, 1., 1.2, .8), 0)
