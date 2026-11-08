@@ -92,7 +92,7 @@ def render(output: Path, timeline: list[TimedScene], voices, limit: float | None
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'torque-converter-1080p60.mp4')
+    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'torque-converter-animasi-3d-1080p60.mp4')
     parser.add_argument('--sample-dir', type=Path)
     parser.add_argument('--limit', type=float)
     args = parser.parse_args()

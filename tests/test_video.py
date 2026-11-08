@@ -8,7 +8,8 @@ import numpy as np
 
 from PIL import ImageDraw
 
-from src.art import OUTPUT_HEIGHT, OUTPUT_WIDTH, VISUALS, cue_start, scene_image
+from src import art, geometry
+from src.art import OUTPUT_HEIGHT, OUTPUT_WIDTH, SCALE, VISUALS, cue_start, scene_image
 from src.audio import (FPS, LEAD_IN, SAMPLE_RATE, SAMPLES_PER_FRAME,
                        caption_cues, make_music, prepare_timeline, write_narration)
 from src.render import frame_at
@@ -95,6 +96,19 @@ class VideoTests(unittest.TestCase):
         stator = cue_start(parts, 'stator mengatur', 0)
         self.assertLess(impeller, turbine)
         self.assertLess(turbine, stator)
+
+    def test_mechanical_motion_and_no_decorative_particles(self):
+        self.assertFalse(any(name in vars(art) for name in ('particles', 'spark', 'orbit', 'ambience')))
+        for kind in ('impeller', 'turbine', 'stator'):
+            self.assertGreater(np.ptp(geometry.rotor(kind).vertices[:, :, 2]), 0.35)
+        stopped = self.timeline[4]
+        first = np.asarray(scene_image(stopped, 3), dtype=np.int16)
+        second = np.asarray(scene_image(stopped, 3.5), dtype=np.int16)
+        delta = np.abs(first - second)
+        y1, y2 = round(400*SCALE), round(780*SCALE)
+        middle = round(360*SCALE)
+        self.assertGreater(np.count_nonzero(delta[y1:y2, :middle] > 5), 1000)
+        self.assertEqual(np.count_nonzero(delta[y1:y2, middle:] > 5), 0)
 
     def test_audio_tracks_are_deterministic_and_exact_length(self):
         with tempfile.TemporaryDirectory() as directory:

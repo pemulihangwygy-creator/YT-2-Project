@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from . import geometry
 from .audio import TimedScene, caption_cues
 
 WIDTH, HEIGHT = 720, 1280
@@ -14,14 +15,14 @@ SCALE = 1.5
 OUTPUT_WIDTH, OUTPUT_HEIGHT = 1080, 1920
 ROOT = Path(__file__).resolve().parent.parent
 FONT_DIR = ROOT / 'assets' / 'fonts'
-WHITE = (247, 250, 244)
-MUTED = (166, 194, 197)
-YELLOW = (255, 210, 70)
-ORANGE = (250, 145, 52)
-BLUE = (57, 190, 229)
-GREEN = (78, 211, 151)
-RED = (255, 97, 86)
-INK = (8, 25, 35)
+WHITE = (247, 249, 242)
+MUTED = (186, 200, 198)
+YELLOW = (255, 213, 89)
+ORANGE = (239, 151, 67)
+BLUE = (68, 182, 220)
+GREEN = (86, 193, 144)
+RED = (235, 89, 75)
+INK = (17, 31, 36)
 
 
 class DesignDraw:
@@ -31,21 +32,18 @@ class DesignDraw:
     @staticmethod
     def _points(points):
         if len(points) and isinstance(points[0], (tuple, list)):
-            return [(x * SCALE, y * SCALE) for x, y in points]
-        return tuple(value * SCALE for value in points)
+            return [(x*SCALE, y*SCALE) for x,y in points]
+        return tuple(value*SCALE for value in points)
 
     @staticmethod
     def _width(value):
-        return max(1, round(value * SCALE))
+        return max(1, round(value*SCALE))
 
     def ellipse(self, xy, fill=None, outline=None, width=1):
         self.draw.ellipse(self._points(xy), fill=fill, outline=outline, width=self._width(width))
 
     def rectangle(self, xy, fill=None, outline=None, width=1):
         self.draw.rectangle(self._points(xy), fill=fill, outline=outline, width=self._width(width))
-
-    def arc(self, xy, start, end, fill=None, width=1):
-        self.draw.arc(self._points(xy), start, end, fill=fill, width=self._width(width))
 
     def line(self, xy, fill=None, width=0, joint=None):
         self.draw.line(self._points(xy), fill=fill, width=self._width(width), joint=joint)
@@ -54,682 +52,367 @@ class DesignDraw:
         self.draw.polygon(self._points(xy), fill=fill, outline=outline, width=self._width(width))
 
     def rounded_rectangle(self, xy, radius=0, fill=None, outline=None, width=1):
-        self.draw.rounded_rectangle(self._points(xy), radius=round(radius * SCALE), fill=fill,
+        self.draw.rounded_rectangle(self._points(xy), radius=round(radius*SCALE), fill=fill,
                                     outline=outline, width=self._width(width))
 
     def text(self, xy, text, font=None, fill=None, anchor=None, stroke_width=0, stroke_fill=None):
         self.draw.text(self._points(xy), text, font=font, fill=fill, anchor=anchor,
-                       stroke_width=round(stroke_width * SCALE), stroke_fill=stroke_fill)
+                       stroke_width=round(stroke_width*SCALE), stroke_fill=stroke_fill)
 
     def textlength(self, text, font=None):
-        return self.draw.textlength(text, font=font) / SCALE
+        return self.draw.textlength(text, font=font)/SCALE
 
 
-def canvas(image: Image.Image) -> DesignDraw:
+def canvas(image):
     return DesignDraw(image)
 
 
-def clamp(value: float, low: float = 0, high: float = 1) -> float:
+def clamp(value, low=0, high=1):
     return max(low, min(high, value))
 
 
-def ease(value: float) -> float:
+def ease(value):
     value = clamp(value)
-    return value * value * (3 - 2 * value)
-
-
-def mix(color: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
-    return tuple(max(0, min(255, round(c * factor))) for c in color)
+    return value*value*(3-2*value)
 
 
 @lru_cache(maxsize=None)
-def font(name: str, size: int) -> ImageFont.FreeTypeFont:
-    names = {
-        'display': 'BarlowCondensed-ExtraBold.ttf',
-        'bold': 'Barlow-Bold.ttf',
-        'body': 'Barlow-SemiBold.ttf',
-    }
-    return ImageFont.truetype(str(FONT_DIR / names[name]), size=round(size * SCALE))
+def font(name, size):
+    names={'display':'BarlowCondensed-ExtraBold.ttf', 'bold':'Barlow-Bold.ttf',
+           'body':'Barlow-SemiBold.ttf'}
+    return ImageFont.truetype(str(FONT_DIR/names[name]), size=round(size*SCALE))
 
 
-def fitted_font(draw, text: str, name: str, size: int, max_width: int):
-    while size > 16 and draw.textlength(text, font=font(name, size)) > max_width:
-        size -= 2
-    return font(name, size)
+def fitted_font(draw, text, name, size, max_width):
+    while size>16 and draw.textlength(text,font=font(name,size))>max_width:
+        size-=1
+    return font(name,size)
 
 
-def centered(draw, xy, text, name='bold', size=30, fill=WHITE, shadow=True, max_width=640):
-    x, y = xy
-    face = fitted_font(draw, text, name, size, max_width)
-    if shadow:
-        draw.text((x + 2, y + 4), text, font=face, fill=(3, 15, 22, 220), anchor='mt',
-                  stroke_width=2, stroke_fill=(3, 15, 22, 220))
-    draw.text((x, y), text, font=face, fill=fill, anchor='mt')
+def centered(draw, xy, text, size=30, color=WHITE, name='bold', max_width=620):
+    face=fitted_font(draw,text,name,size,max_width)
+    x,y=xy
+    draw.text((x+1,y+3),text,font=face,fill=(5,13,18,210),anchor='mt',
+              stroke_width=2,stroke_fill=(5,13,18,210))
+    draw.text((x,y),text,font=face,fill=(*color,255),anchor='mt')
 
 
-def disc(draw, x, y, r, fill, outline=None, width=1):
-    draw.ellipse((x-r, y-r, x+r, y+r), fill=fill, outline=outline, width=width)
-
-
-def ellipse(draw, x, y, rx, ry, fill=None, outline=None, width=1):
-    draw.ellipse((x-rx, y-ry, x+rx, y+ry), fill=fill, outline=outline, width=width)
-
-
-def polar(x, y, radius, angle):
-    return (x + radius * math.cos(angle), y + radius * math.sin(angle))
-
-
-def polar_ellipse(x, y, rx, ry, fraction, angle):
-    return (x + rx * fraction * math.cos(angle), y + ry * fraction * math.sin(angle))
-
-
-@lru_cache(maxsize=1)
-def background() -> Image.Image:
-    x = np.linspace(-1, 1, OUTPUT_WIDTH, dtype=np.float32)[None, :]
-    y = np.linspace(0, 1, OUTPUT_HEIGHT, dtype=np.float32)[:, None]
-    cool = np.exp(-((x / 0.85) ** 2 + ((y - 0.53) / 0.39) ** 2) * 1.3)
-    warm = np.exp(-(((x + 0.82) / 0.60) ** 2 + ((y - 0.24) / 0.33) ** 2) * 1.8)
-    vignette = np.clip(1 - 0.23 * x * x - 0.24 * (y - 0.48) ** 2, 0.60, 1)
-    grain = np.random.default_rng(19).normal(0, 0.8, (OUTPUT_HEIGHT, OUTPUT_WIDTH))
-    data = np.empty((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), dtype=np.uint8)
-    for channel, (base, blue, amber) in enumerate(((9, 14, 9), (22, 27, 5), (31, 32, 1))):
-        data[:, :, channel] = np.clip((base + blue * cool + amber * warm) * vignette + grain, 0, 255)
-    result = Image.fromarray(data, 'RGB')
-    draw = canvas(result)
-    for x0 in range(-140, WIDTH + 160, 76):
-        draw.line((x0, 345, x0 + 230, 1045), fill=(180, 215, 214, 8), width=1)
-    for y0 in range(385, 1060, 76):
-        draw.line((0, y0, WIDTH, y0), fill=(180, 215, 214, 8), width=1)
-    return result
+def label(draw, x, y, text, color=WHITE, secondary=None):
+    centered(draw,(x,y),text,34,color,'display',250)
+    if secondary:
+        centered(draw,(x,y+42),secondary,21,MUTED,'body',260)
 
 
 @lru_cache(maxsize=8)
-def glow_sprite(radius: int, color: tuple[int, int, int]) -> Image.Image:
-    size = round(radius * 2 * SCALE)
-    axis = np.linspace(-1, 1, size, dtype=np.float32)
-    distance = axis[None, :] ** 2 + axis[:, None] ** 2
-    alpha = np.clip(np.exp(-distance * 4.8) * 55, 0, 255).astype(np.uint8)
-    pixels = np.empty((size, size, 4), dtype=np.uint8)
-    pixels[:, :, :3] = color
-    pixels[:, :, 3] = alpha
-    return Image.fromarray(pixels, 'RGBA')
+def background(kind):
+    palettes={
+        'city': ((19,27,45),(55,73,84)),
+        'studio': ((26,37,43),(78,92,92)),
+        'parts': ((25,38,42),(76,94,89)),
+        'fluid': ((16,37,50),(44,76,87)),
+        'idle': ((28,35,41),(76,79,77)),
+        'stator': ((24,42,42),(71,92,83)),
+        'clutch': ((31,35,43),(82,83,84)),
+    }
+    top,bottom=palettes[kind]
+    yy=np.linspace(0,1,OUTPUT_HEIGHT,dtype=np.float32)[:,None]
+    xx=np.linspace(-1,1,OUTPUT_WIDTH,dtype=np.float32)[None,:]
+    vignette=np.clip(1-0.14*xx*xx,0.8,1)
+    data=np.empty((OUTPUT_HEIGHT,OUTPUT_WIDTH,3),dtype=np.uint8)
+    for ch in range(3):
+        data[:,:,ch]=np.clip((top[ch]*(1-yy)+bottom[ch]*yy)*vignette,0,255)
+    result=Image.fromarray(data,'RGB')
+    draw=canvas(result)
+    if kind!='city':
+        draw.polygon(((0,952),(720,952),(720,1280),(0,1280)),fill=(19,28,31,115))
+        draw.line((0,952,720,952),fill=(214,225,217,40),width=2)
+    return result
 
 
-def glow(image: Image.Image, x: float, y: float, radius: int, color: tuple[int, int, int]):
-    sprite = glow_sprite(radius, color)
-    left = round(x * SCALE - sprite.width / 2)
-    top = round(y * SCALE - sprite.height / 2)
-    image.paste(sprite, (left, top), sprite)
+def city(image, time, moving):
+    draw=canvas(image)
+    shift=time*28 if moving else 0
+    for n in range(-2,10):
+        x=n*105-(shift%105)
+        h=115+(n*37)%130
+        draw.rectangle((x,760-h,x+87,760),fill=(24,36,51,230))
+        for row in range(2,6):
+            for col in range(1,3):
+                if (n+row+col)%4==0:
+                    draw.rectangle((x+col*23,760-h+row*19,x+col*23+5,760-h+row*19+9),
+                                   fill=(233,208,155,110))
+    draw.rectangle((0,760,720,854),fill=(41,52,58,255))
+    draw.rectangle((0,854,720,1280),fill=(30,38,44,255))
+    draw.line((0,854,720,854),fill=(190,204,199,135),width=4)
+    for n in range(-1,8):
+        x=n*132-(time*112%132 if moving else 0)
+        draw.line((x,910,x+55,910),fill=(205,213,200,160),width=5)
 
 
-def ambience(image: Image.Image, time: float):
-    glow(image, 145 + 20 * math.sin(time * 0.27), 584, 130, BLUE)
-    glow(image, 582 - 20 * math.sin(time * 0.23), 654, 105, ORANGE)
-    draw = canvas(image)
-    cx, cy = 360, 640
-    for r, phase, alpha in ((272, 0, 36), (310, 70, 27), (358, 150, 18)):
-        box = (cx-r, cy-r*0.82, cx+r, cy+r*0.82)
-        draw.arc(box, phase + time * 4, phase + 84 + time * 4,
-                 fill=(150, 213, 219, alpha), width=2)
-        draw.arc(box, phase + 180 + time * 4, phase + 240 + time * 4,
-                 fill=(255, 202, 101, alpha), width=2)
-    for i in range(21):
-        x = 32 + (i * 173 + time * (6 + i % 4)) % 657
-        y = 342 + ((i * 131 - time * (3 + i % 3)) % 660)
-        size = 1.3 + (i % 3) * 0.7
-        disc(draw, x, y, size, (229, 245, 232, 30 + i % 3 * 10))
+def car(image, x, y, width, wheel_angle, braking):
+    draw=canvas(image)
+    s=width/500
+    def xy(a,b): return (x+a*s,y+b*s)
+    def rr(a): return a*s
+    draw.ellipse((*xy(22,167),*xy(488,204)),fill=(3,11,17,110))
+    body=[xy(8,116),xy(19,88),xy(75,73),xy(114,32),xy(157,14),xy(292,14),
+          xy(345,32),xy(392,73),xy(458,86),xy(489,109),xy(488,150),
+          xy(467,165),xy(33,165),xy(12,151)]
+    draw.polygon(body,fill=(91,139,150,255),outline=(205,224,218,255),width=max(3,int(rr(4))))
+    draw.polygon([xy(20,90),xy(76,74),xy(391,74),xy(457,87),xy(480,104),xy(24,104)],
+                 fill=(153,190,188,255))
+    draw.polygon([xy(20,124),xy(483,124),xy(482,147),xy(459,151),xy(39,151),xy(20,145)],
+                 fill=(64,105,116,255))
+    draw.polygon([xy(87,72),xy(124,39),xy(159,26),xy(224,26),xy(224,72)],
+                 fill=(24,49,58,255),outline=(206,226,219,255),width=max(2,int(rr(2))))
+    draw.polygon([xy(238,26),xy(289,26),xy(335,41),xy(367,72),xy(238,72)],
+                 fill=(26,52,62,255),outline=(206,226,219,255),width=max(2,int(rr(2))))
+    draw.line([xy(102,65),xy(134,40),xy(191,30)],fill=(171,208,207,150),width=max(2,int(rr(3))))
+    draw.line([xy(232,79),xy(232,145)],fill=(48,81,90,255),width=max(2,int(rr(3))))
+    draw.line([xy(150,95),xy(173,95)],fill=(239,246,235,255),width=max(2,int(rr(4))))
+    draw.line([xy(260,95),xy(283,95)],fill=(239,246,235,255),width=max(2,int(rr(4))))
+    draw.rounded_rectangle((*xy(465,104),*xy(487,118)),radius=max(1,int(rr(4))),fill=(255,222,154,255))
+    taillight=(255,65,51,255) if braking else (155,63,55,255)
+    draw.rounded_rectangle((*xy(10,104),*xy(31,118)),radius=max(1,int(rr(4))),fill=taillight)
+    for wx in (105,389):
+        cx,cy=xy(wx,155)
+        draw.ellipse((cx-rr(43),cy-rr(43),cx+rr(43),cy+rr(43)),fill=(10,20,24,255),
+                     outline=(196,213,206,255),width=max(2,int(rr(4))))
+        draw.ellipse((cx-rr(28),cy-rr(28),cx+rr(28),cy+rr(28)),fill=(165,180,176,255))
+        draw.ellipse((cx-rr(8),cy-rr(8),cx+rr(8),cy+rr(8)),fill=(49,70,75,255))
+        for k in range(5):
+            angle=wheel_angle+k*math.tau/5
+            draw.line(((cx+rr(10)*math.cos(angle),cy+rr(10)*math.sin(angle)),
+                       (cx+rr(24)*math.cos(angle),cy+rr(24)*math.sin(angle))),
+                      fill=(63,82,85,255),width=max(2,int(rr(4))))
 
 
-def header(image: Image.Image, scene: TimedScene, time: float):
-    draw = canvas(image)
-    start_y = 82 if len(scene.scene.title) == 3 else 105
-    for index, line in enumerate(scene.scene.title):
-        appear = ease((time - index * 0.08) / 0.48)
-        offset = 22 * (1 - appear)
-        centered(draw, (360, start_y + index * 87 + offset), line,
-                 name='display', size=88 if len(scene.scene.title) == 2 else 84,
-                 fill=YELLOW if index == scene.scene.highlight else WHITE, max_width=644)
-    # A pair of small bolts frames the title without suggesting playback controls.
-    for x in (56, 664):
-        disc(draw, x, 126, 4, (*YELLOW, 200))
-        disc(draw, x, 126, 1.5, (*INK, 255))
-
-
-def capsule(draw, center, text, color=YELLOW, text_color=INK, size=23, pad=20, height=42):
-    x, y = center
-    face = fitted_font(draw, text, 'bold', size, 565)
-    width = draw.textlength(text, font=face) + pad * 2
-    box = (x-width/2, y-height/2, x+width/2, y+height/2)
-    draw.rounded_rectangle((box[0] + 2, box[1] + 4, box[2] + 2, box[3] + 4),
-                           radius=height//2, fill=(2, 14, 21, 130))
-    draw.rounded_rectangle(box, radius=height//2, fill=(*color, 255))
-    draw.text((x, y-size*0.49), text, font=face, fill=(*text_color, 255), anchor='mt')
-
-
-def outlined_capsule(draw, center, text, color=WHITE, size=22, pad=18, height=42):
-    x, y = center
-    face = fitted_font(draw, text, 'bold', size, 560)
-    width = draw.textlength(text, font=face) + pad*2
-    draw.rounded_rectangle((x-width/2, y-height/2, x+width/2, y+height/2),
-                           radius=height//2, fill=(11, 31, 41, 230), outline=(*color, 235), width=2)
-    draw.text((x, y-size*0.49), text, font=face, fill=(*color, 255), anchor='mt')
-
-
-def rotor(image: Image.Image, x: float, y: float, r: float,
-          color: tuple[int, int, int], angle: float, blades: int = 15):
-    if r < 20:
-        return
-    draw = canvas(image)
-    rx, ry = r * 0.86, r
-    depth = max(8, r * 0.16)
-    ellipse(draw, x + depth + 5, y + depth + 11, rx + 8, ry + 8, (0, 8, 13, 110))
-    ellipse(draw, x + depth, y + depth * 0.58, rx + 4, ry + 4,
-            (59, 76, 83, 255), (*WHITE, 230), max(2, round(r/80)))
-    ellipse(draw, x + depth * 0.65, y + depth * 0.33, rx + 4, ry + 4,
-            (100, 121, 126, 255), (28, 50, 58, 255), max(2, round(r/70)))
-    ellipse(draw, x, y, rx + 5, ry + 5, (234, 243, 239, 255))
-    ellipse(draw, x, y, rx + 1, ry + 1, (30, 52, 61, 255))
-    ellipse(draw, x, y, rx - 5, ry - 5, (149, 171, 172, 255))
-    ellipse(draw, x, y, rx - 11, ry - 11, (62, 83, 91, 255))
-    ellipse(draw, x, y, rx * 0.87, ry * 0.87, (*mix(color, 0.43), 255))
-    ellipse(draw, x, y, rx * 0.80, ry * 0.80, (*mix(color, 0.72), 255))
-
-    for n in range(blades):
-        theta = angle + n * math.tau / blades
-        points = [
-            polar_ellipse(x, y, rx, ry, 0.24, theta - 0.07),
-            polar_ellipse(x, y, rx, ry, 0.42, theta - 0.015),
-            polar_ellipse(x, y, rx, ry, 0.63, theta + 0.08),
-            polar_ellipse(x, y, rx, ry, 0.80, theta + 0.18),
-            polar_ellipse(x, y, rx, ry, 0.80, theta + 0.32),
-            polar_ellipse(x, y, rx, ry, 0.62, theta + 0.22),
-            polar_ellipse(x, y, rx, ry, 0.41, theta + 0.11),
-            polar_ellipse(x, y, rx, ry, 0.24, theta + 0.04),
-        ]
-        light = 0.88 + 0.34 * (0.5 + 0.5 * math.cos(theta - 3.4))
-        relief = max(2, r * 0.025)
-        draw.polygon([(px + relief, py + relief * 0.55) for px, py in points],
-                     fill=(*mix(color, 0.35), 255))
-        draw.polygon(points, fill=(*mix(color, light), 255),
-                     outline=(*mix(color, 0.38), 255), width=max(1, round(r/110)))
-        draw.line(points[1:4], fill=(*mix(color, 1.38), 220), width=max(1, round(r/90)), joint='curve')
-        draw.line(points[5:7], fill=(*mix(color, 0.58), 160), width=max(1, round(r/110)), joint='curve')
-
-    ellipse(draw, x + depth*0.35, y + depth*0.25, rx*0.31, ry*0.31,
-            (25, 42, 50, 255), (185, 210, 207, 235), max(2, round(r/70)))
-    for scale, fill, outline in ((0.295, (27, 45, 52, 255), (*WHITE, 245)),
-                                  (0.245, (133, 157, 160, 255), (55, 78, 87, 255)),
-                                  (0.175, (47, 69, 76, 255), (194, 214, 209, 235)),
-                                  (0.102, (13, 31, 40, 255), (76, 103, 109, 255))):
-        ellipse(draw, x, y, rx * scale, ry * scale, fill, outline, max(1, round(r/110)))
-    ring = (x-rx*0.96, y-ry*0.96, x+rx*0.96, y+ry*0.96)
-    draw.arc(ring, 205, 305, fill=(248, 255, 246, 210), width=max(2, round(r/40)))
-    draw.arc(ring, 20, 105, fill=(19, 40, 48, 200), width=max(2, round(r/48)))
-    for n in range(8):
-        bx, by = polar_ellipse(x, y, rx, ry, 0.925, angle + n * math.tau / 8)
-        disc(draw, bx, by, max(2, r*0.017), (28, 44, 49, 255))
-        disc(draw, bx-r*0.004, by-r*0.004, max(1, r*0.006), (197, 210, 205, 230))
+def mesh(image, obj, x, y, size, spin=0, yaw=0.65, pitch=-0.16):
+    geometry.render(image,obj,x,y,size,spin=spin,yaw=yaw,pitch=pitch,scale=SCALE)
 
 
 @lru_cache(maxsize=1)
-def shell_master() -> Image.Image:
-    size = 768
-    axis = np.linspace(-1.04, 1.04, size, dtype=np.float32)
-    xx, yy = np.meshgrid(axis, axis)
-    ex = xx / 0.86
-    radial = np.sqrt(ex * ex + yy * yy) + 1e-7
-    u = (radial - 0.54) / 0.44
-    height = np.sqrt(np.clip(1.0 - u * u, 0, 1))
-    nx = np.clip(u, -1, 1) * ex / radial
-    ny = np.clip(u, -1, 1) * yy / radial
-    light = np.clip(-0.37 * nx - 0.50 * ny + 0.78 * height, 0, 1)
-    shine = np.clip(-0.23 * nx - 0.36 * ny + 0.90 * height, 0, 1) ** 24
-    reflected = (0.5 + 0.5 * np.cos(5.8 * nx - 2.5 * ny + height * 3.8)) * height
-    brush = np.sin(radial * 2500 + np.arctan2(yy, ex) * 8) * 1.9
-    value = np.clip(34 + 111 * light + 65 * shine + 30 * reflected + brush, 0, 255)
-    mask = np.clip((1 - np.abs(u)) * 34, 0, 1)
-    rgba = np.empty((size, size, 4), dtype=np.uint8)
-    rgba[:, :, 0] = np.clip(value * 0.91, 0, 255).astype(np.uint8)
-    rgba[:, :, 1] = np.clip(value * 0.98, 0, 255).astype(np.uint8)
-    rgba[:, :, 2] = np.clip(value * 1.02 + 4, 0, 255).astype(np.uint8)
-    rgba[:, :, 3] = (mask * 255).astype(np.uint8)
-    return Image.fromarray(rgba, 'RGBA')
+def shell_master():
+    result=Image.new('RGBA',(960,960),(0,0,0,0))
+    mesh(result,geometry.converter(),320,320,260,yaw=0.68)
+    return result
 
 
 @lru_cache(maxsize=96)
-def sized_shell(size: int) -> Image.Image:
-    return shell_master().resize((size, size), Image.Resampling.LANCZOS)
+def shell_size(size):
+    return shell_master().resize((size,size),Image.Resampling.LANCZOS)
 
 
-def converter_shell(image: Image.Image, x: float, y: float, radius: float, time: float):
-    if radius < 15:
-        return
-    draw = canvas(image)
-    ellipse(draw, x + radius*0.10, y + radius*0.12, radius*0.88, radius*1.02,
-            fill=(0, 9, 15, 115))
-    size = max(16, round((radius * 2 * SCALE) / 4) * 4)
-    sprite = sized_shell(size)
-    image.paste(sprite, (round(x*SCALE-size/2), round(y*SCALE-size/2)), sprite)
-    rx, ry = radius*0.83, radius*0.97
-    ellipse(draw, x, y, rx, ry, outline=(221, 238, 232, 210), width=max(2, radius/85))
-    ellipse(draw, x, y, rx*0.80, ry*0.80, outline=(28, 46, 53, 130), width=max(2, radius/100))
-    ellipse(draw, x, y, rx*0.76, ry*0.76, outline=(210, 224, 215, 105), width=max(1, radius/140))
-    outer=(x-rx*0.95,y-ry*0.95,x+rx*0.95,y+ry*0.95)
-    draw.arc(outer, 205, 310, fill=(255, 255, 243, 180), width=max(2, radius/65))
-    for n in range(10):
-        a = time*0.45 + n*math.tau/10
-        bx, by = polar_ellipse(x, y, rx, ry, 0.88, a)
-        disc(draw, bx, by, max(2.2, radius*0.018), (29, 43, 48, 255))
-        disc(draw, bx-radius*0.005, by-radius*0.006, max(1, radius*0.006), (225, 233, 224, 230))
-    ellipse(draw,x+radius*0.03,y+radius*0.025,rx*0.22,ry*0.22,
-            (30,48,55,255),(233,244,235,240),max(2,radius/65))
-    ellipse(draw,x,y,rx*0.19,ry*0.19,(154,176,173,255),(41,62,69,255),max(2,radius/75))
-    ellipse(draw,x,y,rx*0.105,ry*0.105,(16,36,44,255),(195,215,207,220),max(1,radius/110))
+def shell(image,x,y,radius):
+    size=max(8,round(960*radius/260/4)*4)
+    sprite=shell_size(size)
+    image.paste(sprite,(round(x*SCALE-size/2),round(y*SCALE-size/2)),sprite)
 
 
-def cityscape(image: Image.Image, time: float, movement: float = 1.0):
-    draw = canvas(image)
-    for layer in (0, 1):
-        spacing = 83 if layer == 0 else 112
-        shift = (time * (5 if layer == 0 else 12) * movement) % spacing
-        base = 795 if layer == 0 else 830
-        for n in range(-2, 11):
-            x = n*spacing - shift
-            height = 100 + ((n*53 + layer*71) % 126)
-            width = spacing - 15 + ((n*13) % 10)
-            tone = (85, 139, 148, 22) if layer == 0 else (74, 119, 129, 34)
-            draw.rectangle((x,base-height,x+width,base),fill=tone)
-            for row in range(2, 6):
-                for column in range(1, 3):
-                    if (n + row + column) % 3 == 0:
-                        wx=x+column*21
-                        wy=base-height+row*20
-                        if wy<base-8:
-                            draw.rectangle((wx,wy,wx+4,wy+8),fill=(255,210,120,35))
+def shadow(draw,x,y,width=190):
+    draw.ellipse((x-width,y-20,x+width,y+20),fill=(2,9,12,100))
 
 
-def fluid_stream(draw, points, time, color=BLUE, count=7, speed=0.18):
-    draw.line(points, fill=(*color, 22), width=23, joint='curve')
-    draw.line(points, fill=(*color, 50), width=13, joint='curve')
-    arrow(draw, points, color, 7, 21)
-    particles(draw, points, time, WHITE, count, speed)
-
-
-def arrow(draw, points, color=BLUE, width=8, tip=20):
-    draw.line(points, fill=(*INK, 190), width=width+9, joint='curve')
-    draw.line(points, fill=(*mix(color, 0.70), 255), width=width+3, joint='curve')
-    draw.line(points, fill=(*color, 255), width=width, joint='curve')
-    ex, ey = points[-1]
-    px, py = points[-2]
-    angle = math.atan2(ey-py, ex-px)
-    left = (ex-tip*math.cos(angle-0.55), ey-tip*math.sin(angle-0.55))
-    right = (ex-tip*math.cos(angle+0.55), ey-tip*math.sin(angle+0.55))
-    draw.polygon(((ex, ey), left, right), fill=(*color, 255))
-
-
-def bezier(a, b, c, d, count=45):
-    points = []
+def bezier(a,b,c,d,count=48):
+    result=[]
     for n in range(count):
-        t = n / (count - 1)
-        u = 1 - t
-        points.append((u**3*a[0] + 3*u*u*t*b[0] + 3*u*t*t*c[0] + t**3*d[0],
-                       u**3*a[1] + 3*u*u*t*b[1] + 3*u*t*t*c[1] + t**3*d[1]))
-    return points
+        t=n/(count-1);u=1-t
+        result.append((u**3*a[0]+3*u*u*t*b[0]+3*u*t*t*c[0]+t**3*d[0],
+                       u**3*a[1]+3*u*u*t*b[1]+3*u*t*t*c[1]+t**3*d[1]))
+    return result
 
 
-def particles(draw, points, time, color=BLUE, count=5, speed=0.20):
-    for i in range(count):
-        p = (time*speed + i/count) % 1
-        index = min(len(points)-1, int(p*(len(points)-1)))
-        old = max(0, index-2)
-        draw.line((points[old], points[index]), fill=(*color, 105), width=8)
-        x, y = points[index]
-        disc(draw, x, y, 5, (*color, 200))
-        disc(draw, x-1, y-1, 2, (*WHITE, 235))
-
-
-def spark(draw, x, y, size, color=YELLOW):
-    draw.polygon(((x, y-size), (x+size*0.22, y-size*0.22), (x+size, y),
-                  (x+size*0.22, y+size*0.22), (x, y+size),
-                  (x-size*0.22, y+size*0.22), (x-size, y),
-                  (x-size*0.22, y-size*0.22)), fill=(*color, 210))
-
-
-def orbit(draw, x, y, rx, ry, time, color=BLUE):
-    box = (x-rx, y-ry, x+rx, y+ry)
-    start = time*28
-    draw.arc(box, start, start+78, fill=(*color, 145), width=3)
-    draw.arc(box, start+166, start+218, fill=(*WHITE, 95), width=2)
-    a = math.radians(start+78)
-    px, py = x+rx*math.cos(a), y+ry*math.sin(a)
-    disc(draw, px, py, 4, (*color, 230))
-
-
-def engine(image, x, y, size, time):
-    draw = canvas(image)
-    s = size / 150
-    def xy(a, b): return (x+a*s, y+b*s)
-    draw.rounded_rectangle((*xy(-65, -29), *xy(64, 58)), radius=int(14*s),
-                           fill=(91, 115, 123, 255), outline=(*WHITE, 245), width=max(3, int(4*s)))
-    draw.polygon([xy(-54,-29), xy(-43,-58), xy(35,-58), xy(48,-29)],
-                 fill=(160, 183, 182, 255), outline=(*WHITE, 245), width=max(3, int(4*s)))
-    draw.polygon([xy(-57,-23), xy(58,-23), xy(58,-8), xy(-57,-8)], fill=(142, 168, 169, 255))
-    draw.line([xy(-40,-58), xy(-40,-75), xy(15,-75)], fill=(*WHITE, 255), width=max(3,int(5*s)))
-    draw.line([xy(63,-4), xy(78,-4), xy(78,32), xy(63,32)], fill=(*WHITE,255), width=max(3,int(5*s)))
-    for a in (-39,-13,13):
-        draw.rounded_rectangle((*xy(a,-19), *xy(a+14,6)), radius=int(4*s), fill=(35,59,68,255))
-    disc(draw, *xy(-31,31), 17*s, (42,65,74,255), (*WHITE,255), max(2,int(3*s)))
-    disc(draw, *xy(-31,31), 7*s, (*YELLOW,255))
-    for n in range(4):
-        a=time*2+n*math.pi/2
-        p=polar(*xy(-31,31), 13*s, a)
-        disc(draw, *p, 2*s, (*WHITE,230))
-    draw.line([xy(4,27),xy(44,27)], fill=(*WHITE,255), width=max(2,int(4*s)))
-    draw.line([xy(4,42),xy(35,42)], fill=(183,209,205,255), width=max(2,int(4*s)))
-
-
-def gearbox(image, x, y, size):
-    draw = canvas(image)
-    s = size / 150
-    def xy(a,b): return (x+a*s, y+b*s)
-    points=[xy(-70,-44),xy(-30,-56),xy(35,-45),xy(62,-25),
-            xy(68,27),xy(35,49),xy(-30,56),xy(-70,44)]
-    draw.polygon(points, fill=(99,128,135,255), outline=(*WHITE,255), width=max(3,int(4*s)))
-    draw.polygon([xy(-20,-44),xy(34,-37),xy(58,-19),xy(58,-4),xy(-20,-9)], fill=(144,172,172,255))
-    disc(draw,*xy(-42,0),34*s,(54,78,87,255),(*WHITE,255),max(2,int(4*s)))
-    disc(draw,*xy(-42,0),19*s,(165,190,186,255))
-    disc(draw,*xy(-42,0),9*s,(36,59,69,255))
-    for a in (-5,11,27,43):
-        draw.line([xy(a,-30),xy(a,30)], fill=(44,71,79,255), width=max(2,int(4*s)))
-
-
-def car(image, x, y, width, time, braking=False):
-    draw = canvas(image)
-    s = width/500
-    def xy(a,b): return (x+a*s, y+b*s)
-    def r(a): return a*s
-    draw.ellipse((*xy(15,165),*xy(490,205)),fill=(1,12,19,120))
-    body=[xy(7,116),xy(18,89),xy(72,74),xy(114,32),xy(158,15),xy(290,15),
-          xy(344,32),xy(391,73),xy(457,87),xy(489,109),xy(488,151),xy(468,165),
-          xy(32,165),xy(12,151)]
-    draw.polygon(body,fill=(87,133,146,255),outline=(*WHITE,255),width=max(4,int(r(5))))
-    draw.polygon([xy(17,91),xy(72,75),xy(389,75),xy(454,88),xy(477,105),xy(24,105)],
-                 fill=(147,187,191,255))
-    draw.polygon([xy(20,126),xy(482,126),xy(483,146),xy(457,151),xy(37,151),xy(20,145)],
-                 fill=(69,111,123,255))
-    draw.polygon([xy(84,73),xy(123,39),xy(159,27),xy(225,27),xy(225,73)],
-                 fill=(24,52,65,255),outline=(220,239,233,255),width=max(2,int(r(3))))
-    draw.polygon([xy(238,27),xy(288,27),xy(333,42),xy(367,73),xy(238,73)],
-                 fill=(26,55,67,255),outline=(220,239,233,255),width=max(2,int(r(3))))
-    draw.line([xy(105,65),xy(138,38),xy(190,32)],fill=(155,199,205,130),width=max(2,int(r(3))))
-    draw.line([xy(233,81),xy(233,145)],fill=(45,83,96,255),width=max(2,int(r(3))))
-    draw.line([xy(150,96),xy(173,96)],fill=(*WHITE,255),width=max(2,int(r(4))))
-    draw.line([xy(260,96),xy(283,96)],fill=(*WHITE,255),width=max(2,int(r(4))))
-    draw.rounded_rectangle((*xy(463,104),*xy(489,119)),radius=max(1,int(r(4))),fill=(*YELLOW,255))
-    draw.rounded_rectangle((*xy(9,104),*xy(31,119)),radius=max(1,int(r(4))),fill=(*RED,255))
-    if braking:
-        for i in range(3):
-            draw.line([xy(-12-i*9,107+i*8),xy(1,107+i*8)],fill=(*RED,175-i*30),width=max(2,int(r(4))))
-    for cx in (105,389):
-        wx,wy=xy(cx,155)
-        disc(draw,wx,wy,r(43),(8,23,30,255),(*WHITE,255),max(3,int(r(4))))
-        disc(draw,wx,wy,r(32),(57,81,89,255),(17,38,46,255),max(2,int(r(3))))
-        disc(draw,wx,wy,r(24),(168,188,187,255))
-        disc(draw,wx,wy,r(8),(42,65,73,255))
-        for n in range(5):
-            a=time*2+n*math.tau/5
-            draw.line((polar(wx,wy,r(9),a),polar(wx,wy,r(22),a)),
-                      fill=(48,77,86,255),width=max(2,int(r(4))))
-
-
-def road(draw, y, time, speed=110):
-    draw.line((40,y,680,y),fill=(185,224,220,105),width=3)
-    for n in range(-1,8):
-        x=42+n*110-(time*speed)%110
-        draw.line((x,y+23,x+48,y+23),fill=(218,239,232,85),width=4)
+def fluid(draw,points,time,color=BLUE,speed=0.20):
+    draw.line(points,fill=(*color,135),width=14,joint='curve')
+    start=int(((time*speed)%1)*(len(points)-1))
+    length=12
+    segment=[points[(start+i)%(len(points)-1)] for i in range(length)]
+    # A discontinuous wrap is split rather than drawn across the diagram.
+    if start+length<len(points):
+        draw.line(segment,fill=(204,242,244,240),width=7,joint='curve')
+    else:
+        first=points[start:]
+        second=points[:(start+length)%(len(points)-1)]
+        if len(first)>1: draw.line(first,fill=(204,242,244,240),width=7,joint='curve')
+        if len(second)>1: draw.line(second,fill=(204,242,244,240),width=7,joint='curve')
+    ex,ey=points[-1]; px,py=points[-2]
+    angle=math.atan2(ey-py,ex-px)
+    p1=(ex-19*math.cos(angle-0.5),ey-19*math.sin(angle-0.5))
+    p2=(ex-19*math.cos(angle+0.5),ey-19*math.sin(angle+0.5))
+    draw.polygon(((ex,ey),p1,p2),fill=(*color,255))
 
 
 @lru_cache(maxsize=64)
-def cue_start(scene: TimedScene, needle: str, default: float) -> float:
-    for start, _, phrase in caption_cues(scene):
+def cue_start(scene: TimedScene, needle: str, default: float):
+    for start,_,phrase in caption_cues(scene):
         if needle.casefold() in phrase.casefold():
             return start-scene.start
     return default
 
 
-def visual_intro(image, time, scene):
+def scene_style(scene,time):
+    visual=scene.scene.visual
+    if visual=='intro':
+        return 'city' if time<cue_start(scene,'Rahasianya',scene.duration*0.55) else 'studio'
+    if visual=='outro':
+        return 'city' if time>=cue_start(scene,'yang bikin mobil matik',scene.duration*0.55) else 'studio'
+    return {'connection':'studio','parts':'parts','flow':'fluid','idle':'idle',
+            'stator':'stator','lockup':'clutch'}[visual]
+
+
+def visual_intro(image,time,scene):
     draw=canvas(image)
-    reveal_start=cue_start(scene,'Rahasianya',scene.duration*0.55)
-    reveal=ease((time-reveal_start)/0.65)
-    if reveal < 0.98:
-        cityscape(image, time, 0.35 if time > 1.3 else 1.0)
-        road(draw, 838+reveal*70, 0)
-        shift=70*(1-ease(time/1.3))
-        car(image, 100-shift, 636+reveal*190, 520*(1-reveal*0.16), min(time,1.3), braking=time>1.3)
-        if time>1.1 and reveal<0.45:
-            capsule(draw,(360,475),'REM DIINJAK',RED,WHITE,23,22,44)
-            outlined_capsule(draw,(360,929),'MESIN TETAP MENYALA',YELLOW,22)
-    if reveal>0:
-        r=205*reveal
-        orbit(draw,360,630,r+34,(r+34)*0.91,time,YELLOW)
-        converter_shell(image,360,630,r,time)
-        if reveal>0.55:
-            capsule(draw,(360,914),'TORQUE CONVERTER',YELLOW,INK,25,25,48)
-            spark(draw,155,481,9,YELLOW)
-            spark(draw,572,757,7,BLUE)
-
-
-def visual_connection(image, time, scene):
-    draw=canvas(image)
-    enter=ease(time/0.75)
-    focus=ease((time-cue_start(scene,'Uniknya, tenaga dikirim',scene.duration*0.5))/0.8)
-    left=118-55*(1-enter)-260*focus
-    right=602+55*(1-enter)+260*focus
-    y=615
-    draw.line((left+40,y,right-40,y),fill=(115,175,184,100),width=13)
-    draw.line((left+40,y,right-40,y),fill=(211,234,226,135),width=3)
-    top=bezier((max(38,left+45),580),(220,495-40*focus),(500,495-40*focus),
-               (min(682,right-45),580))
-    arrow(draw,top,BLUE,5,15)
-    particles(draw,top,time,BLUE,7,0.15)
-    if left > -100:
-        engine(image,left,y,145,time)
-    if right < WIDTH+100:
-        gearbox(image,right,y,145)
-    radius=(139+40*focus)*(0.88+0.12*enter)
-    orbit(draw,360,y,radius+23,(radius+23)*1.09,time,YELLOW)
-    if focus>0.1:
-        oil=arc_points(360,y,radius+45,radius+55,math.radians(35+time*22),
-                       math.radians(135+time*22))
-        arrow(draw,oil,BLUE,6,17)
-        particles(draw,oil,time,WHITE,3,0.22)
-    converter_shell(image,360,y,radius,time)
-    internal=ease((focus-0.25)/0.55)
-    if internal>0.04:
-        rotor(image,360,y,radius*0.79*internal,(97,168,190),time*0.85,18)
-    for x,text in ((left,'MESIN'),(360,'TORCON'),(right,'TRANSMISI')):
-        if 50<x<670:
-            centered(draw,(x,818+28*focus),text,'display',36,WHITE,max_width=190)
-    outlined_capsule(draw,(360,938),'TENAGA MENGALIR MELALUI OLI',BLUE,21,20,42)
-
-
-def visual_parts(image, time, scene):
-    draw=canvas(image)
-    reveal_start=cue_start(scene,'Impeler berputar',scene.duration*0.25)
-    unfold=ease((time-reveal_start+0.35)/0.75)
-    if unfold<0.95:
-        rotor(image,360,580,160*(1-0.6*unfold),(150,173,177),time*0.6,18)
-        if unfold<0.35:
-            outlined_capsule(draw,(360,815),'TIGA BAGIAN UTAMA',YELLOW,22)
-    if unfold<=0.05:
-        return
-    specs=[(150,ORANGE,'IMPELER','Impeler berputar',96),
-           (570,BLUE,'TURBIN','turbin tersambung',96),
-           (360,GREEN,'STATOR','stator mengatur',78)]
-    draw.line((90,565,630,565),fill=(181,214,211,75),width=4)
-    for target_x,color,label,needle,radius in specs:
-        start=cue_start(scene,needle,reveal_start)
-        pop=ease((time-start+0.20)/0.55)
-        x=360+(target_x-360)*unfold
-        y=565+(1-unfold)*50
-        if pop>0.02:
-            rotor(image,x,y,radius*(0.66+0.34*pop),color,time*(0.45 if label!='STATOR' else 0)+0.2,15 if label!='STATOR' else 11)
-        elif unfold>0.80:
-            ellipse(draw,x,y,radius*0.75,radius*0.88,outline=(*color,70),width=3)
-        if pop>0.45 and unfold>0.80:
-            capsule(draw,(target_x,710),label,color,INK,20,15,38)
-    rows=[(ORANGE,'IMPELER','DIPUTAR MESIN','Impeler berputar'),
-          (BLUE,'TURBIN','KE TRANSMISI','turbin tersambung'),
-          (GREEN,'STATOR','ARAHKAN OLI','stator mengatur')]
-    for n,(color,label,desc,needle) in enumerate(rows):
-        active=ease((time-cue_start(scene,needle,reveal_start))/0.35)
-        if active<=0.01:
-            continue
-        yy=770+n*61
-        draw.rounded_rectangle((73,yy,647,yy+49),radius=14,
-                               fill=(7,27,37,190),outline=(*color,100),width=2)
-        disc(draw,98,yy+24,6,(*color,255))
-        draw.text((118,yy+8),label,font=font('bold',24),fill=(*WHITE,255))
-        draw.text((318,yy+10),desc,font=font('body',21),fill=(*MUTED,255))
-
-
-def visual_flow(image, time, scene):
-    draw=canvas(image)
-    delivery=ease((time-cue_start(scene,'lalu tenaga diteruskan',scene.duration*0.7)+0.3)/1.0)
-    left=185-60*delivery
-    right=535-120*delivery
-    radius=136-22*delivery
-    upper=bezier((left-48,522),(left-32,370),(right+32,370),(right+48,522))
-    lower=bezier((right+48,722),(right+32,870),(left-32,870),(left-48,722))
-    fluid_stream(draw,upper,time,BLUE,8,0.18)
-    fluid_stream(draw,lower,time+0.8,(112,211,225),7,0.13)
-    rotor(image,left,620,radius,ORANGE,time*1.15,16)
-    rotor(image,right,620,radius,BLUE,time*0.87,16)
-    orbit(draw,left,620,radius+6,radius+22,time,ORANGE)
-    orbit(draw,right,620,radius+6,radius+22,time*0.85,BLUE)
-    if delivery>0.65:
-        path=bezier((right+radius*0.86+14,620),(right+radius+35,620),
-                    (588,620),(600,620))
-        arrow(draw,path,YELLOW,6,16)
-        particles(draw,path,time,YELLOW,3,0.25)
-        gearbox(image,630+(1-delivery)*90,620,125)
-    capsule(draw,((left+right)/2,432),'ALIRAN OLI',BLUE,INK,23,22,44)
-    outlined_capsule(draw,(left,884),'IMPELER',ORANGE,20)
-    outlined_capsule(draw,(right,884),'TURBIN',BLUE,20)
-    if delivery>0.6:
-        outlined_capsule(draw,(630,884),'TRANSMISI',WHITE,18,12,38)
-    centered(draw,(360,950),'TENAGA DITERUSKAN', 'display',38, WHITE)
-
-
-def visual_idle(image, time, scene):
-    draw=canvas(image)
-    pulse=0.5+0.5*math.sin(time*3)
-    ellipse(draw,360,401,142+5*pulse,32+3*pulse,fill=(*RED,30))
-    capsule(draw,(360,401),'REM DIINJAK',RED,WHITE,23,24,44)
-    rotor(image,185,620,132,ORANGE,time*1.2,16)
-    rotor(image,535,620,132,BLUE,0.15,16)
-    orbit(draw,185,620,139,154,time,ORANGE)
-    centered(draw,(185,785),'IMPELER', 'display',39, ORANGE, max_width=260)
-    centered(draw,(185,831),'TETAP BERPUTAR','bold',22,WHITE,max_width=260)
-    centered(draw,(535,785),'TURBIN', 'display',39, BLUE, max_width=260)
-    centered(draw,(535,831),'BISA DIAM','bold',22,WHITE,max_width=260)
-    for n in range(3):
-        xx=325+n*35
-        yy=619+7*math.sin(time*3+n)
-        disc(draw,xx,yy,5,(*BLUE,180))
-    outlined_capsule(draw,(360,938),'MESIN TETAP MENYALA',YELLOW,23,20,46)
-
-
-def arc_points(x,y,rx,ry,start,end,count=35):
-    return [(x+rx*math.cos(start+(end-start)*n/(count-1)),
-             y+ry*math.sin(start+(end-start)*n/(count-1))) for n in range(count)]
-
-
-def visual_stator(image, time, scene):
-    draw=canvas(image)
-    boost=ease((time-cue_start(scene,'sehingga tarikan awal',scene.duration*0.7)+0.2)/0.9)
-    cy=590-85*boost
-    r=164-48*boost+4*math.sin(time*0.9)
-    rotor(image,360,cy,r,GREEN,0.12,11)
-    rx,ry=r+60,r+65
-    upper=arc_points(360,cy,rx,ry,math.radians(200),math.radians(322))
-    lower=arc_points(360,cy,rx,ry,math.radians(22),math.radians(142))
-    arrow(draw,upper,ORANGE,9,22)
-    arrow(draw,lower,BLUE,9,22)
-    particles(draw,upper,time,WHITE,4,0.14)
-    particles(draw,lower,time+1.0,BLUE,4,0.14)
-    capsule(draw,(360,cy),'STATOR',GREEN,INK,22,18,42)
-    if boost<0.5:
-        for side in (-1,1):
-            for n in range(3):
-                x=360+side*(145+n*24)
-                y=891-(time*28+n*26)%75
-                draw.line((x-10,y+9,x,y-2,x+10,y+9),fill=(*YELLOW,145),width=4,joint='curve')
-        centered(draw,(360,842),'TARIKAN AWAL','bold',24,MUTED)
-        centered(draw,(360,894),'TORSI LEBIH KUAT','display',45,YELLOW)
-        centered(draw,(360,957),'PADA KONDISI TERTENTU','body',21,WHITE)
+    reveal=cue_start(scene,'Rahasianya',scene.duration*0.55)
+    if time<reveal:
+        start=cue_start(scene,'bisa berhenti',1)
+        gas=cue_start(scene,'Tapi, begitu gas diinjak,',scene.duration*0.28)
+        braking=start<=time<gas
+        moving=time<start or time>=gas
+        city(image,time,moving)
+        advance=100*ease((time-gas)/2) if time>=gas else -45*(1-ease(time/max(start,0.4)))
+        wheel=time*2 if moving else start*2
+        car(image,72+advance,615,570,wheel,braking)
     else:
-        centered(draw,(360,731),'TARIKAN AWAL LEBIH KUAT','display',41,YELLOW)
-        road(draw,976,time)
-        car(image,157+12*math.sin(time),810,405,time)
+        appear=ease((time-reveal)/0.55)
+        shadow(draw,360,927,205)
+        shell(image,360,602,220*(0.86+0.14*appear))
+        label(draw,360,905,'TORQUE CONVERTER',YELLOW)
 
 
-def visual_lockup(image, time, scene):
+def visual_connection(image,time,scene):
     draw=canvas(image)
-    lock_start=cue_start(scene,'kopling pengunci',scene.duration*0.3)
-    close=ease((time-lock_start+0.35)/1.2)
-    left=195+close*45
-    right=525-close*45
-    draw.line((55,612,665,612),fill=(200,229,222,90),width=7)
-    rotor(image,left,612,134,ORANGE,time*0.86,16)
-    rotor(image,right,612,134,BLUE,time*(0.50+0.36*close),16)
-    if close>0.05:
-        pulse=1+0.08*math.sin(time*4)
-        ellipse(draw,360,612,57*pulse,48*pulse,fill=(*YELLOW,30))
-        draw.rounded_rectangle((311,570,409,654),radius=22,fill=(10,30,39,245),
-                               outline=(*WHITE,255),width=4)
-        draw.rounded_rectangle((325,587,370,622),radius=17,outline=(*YELLOW,255),width=7)
-        draw.rounded_rectangle((350,601,395,636),radius=17,outline=(*YELLOW,255),width=7)
-    capsule(draw,(360,405),'KOPLING PENGUNCI',YELLOW,INK,23,22,44)
-    if close>0.65:
-        centered(draw,(360,822),'TERHUBUNG LEBIH LANGSUNG','display',39,WHITE)
-        outlined_capsule(draw,(360,918),'SELIP BERKURANG',BLUE,22,20,43)
+    focus=ease((time-cue_start(scene,'Uniknya, tenaga dikirim',scene.duration*0.5))/0.7)
+    if focus<0.96:
+        shift=280*focus
+        left=115-shift;right=605+shift
+        draw.line((left+62,635,right-62,635),fill=(146,170,169,220),width=16)
+        draw.line((left+62,630,right-62,630),fill=(219,228,218,180),width=3)
+        if left>-130:
+            mesh(image,geometry.engine(),left,610,104,yaw=0.42,pitch=-0.28)
+            label(draw,left,810,'MESIN')
+        if right<850:
+            mesh(image,geometry.transmission(),right,610,102,yaw=0.50,pitch=-0.25)
+            label(draw,right,810,'TRANSMISI')
+        shell(image,360,610,144+50*focus)
+        label(draw,360,847,'TORCON',YELLOW)
+    else:
+        upper=bezier((168,492),(200,345),(520,345),(552,492))
+        lower=bezier((552,742),(520,875),(200,875),(168,742))
+        fluid(draw,upper,time,BLUE)
+        fluid(draw,lower,time+0.6,BLUE,0.16)
+        mesh(image,geometry.rotor('impeller'),195,614,133,spin=time*0.9)
+        mesh(image,geometry.rotor('turbine'),525,614,133,spin=time*0.65)
+        label(draw,195,840,'IMPELER',ORANGE)
+        label(draw,525,840,'TURBIN',BLUE)
+        centered(draw,(360,938),'ALIRAN OLI',27,WHITE,'bold')
+
+
+def visual_parts(image,time,scene):
+    draw=canvas(image)
+    keys=[('impeller','Impeler berputar','IMPELER',ORANGE,'DIPUTAR MESIN'),
+          ('turbine','turbin tersambung','TURBIN',BLUE,'KE TRANSMISI'),
+          ('stator','stator mengatur','STATOR',GREEN,'MENGARAHKAN OLI')]
+    starts=[cue_start(scene,k[1],1+n*2) for n,k in enumerate(keys)]
+    if time<starts[0]-0.28:
+        shadow(draw,360,932,200)
+        shell(image,360,602,215)
+        return
+    active=max(0,min(2,sum(time>=t for t in starts)-1))
+    transition=ease((time-starts[active])/0.38)
+    if transition<1:
+        old_x=360-540*transition
+        if old_x>-260:
+            if active==0:
+                shell(image,old_x,590,215)
+            else:
+                old=keys[active-1]
+                mesh(image,geometry.rotor(old[0]),old_x,590,225,spin=time*0.65)
+    name,_,text,color,role=keys[active]
+    new_x=360+540*(1-transition)
+    mesh(image,geometry.rotor(name),new_x,590,225,spin=time*(0 if name=='stator' else 0.65))
+    if transition>0.55:
+        label(draw,360,916,text,color,role)
+
+
+def visual_flow(image,time,scene):
+    draw=canvas(image)
+    upper=bezier((159,500),(190,350),(530,350),(561,500))
+    lower=bezier((561,714),(530,870),(190,870),(159,714))
+    fluid(draw,upper,time,BLUE,0.17)
+    fluid(draw,lower,time+0.8,BLUE,0.14)
+    mesh(image,geometry.rotor('impeller'),191,610,143,spin=time*1.05)
+    mesh(image,geometry.rotor('turbine'),529,610,143,spin=time*0.78)
+    label(draw,191,858,'IMPELER',ORANGE)
+    label(draw,529,858,'TURBIN',BLUE)
+    centered(draw,(360,946),'ALIRAN OLI',23,WHITE,'bold')
+
+
+def visual_idle(image,time,scene):
+    draw=canvas(image)
+    mesh(image,geometry.rotor('impeller'),191,590,145,spin=time*1.05)
+    mesh(image,geometry.rotor('turbine'),529,590,145,spin=0.25)
+    label(draw,191,838,'IMPELER',ORANGE,'BERPUTAR')
+    label(draw,529,838,'TURBIN',BLUE,'DIAM')
+    draw.rounded_rectangle((246,954,474,1005),radius=10,fill=(*RED,255))
+    centered(draw,(360,965),'REM DIINJAK',22,WHITE,'bold')
+
+
+def visual_stator(image,time,scene):
+    draw=canvas(image)
+    boost=ease((time-cue_start(scene,'sehingga tarikan awal',scene.duration*0.7)+0.2)/0.65)
+    y=598-125*boost
+    radius=210-55*boost
+    top=bezier((126,y-25),(160,y-290),(560,y-290),(594,y-25))
+    bottom=bezier((594,y+25),(560,y+290),(160,y+290),(126,y+25))
+    fluid(draw,top,time,ORANGE,0.17)
+    fluid(draw,bottom,time+0.4,BLUE,0.15)
+    mesh(image,geometry.rotor('stator'),360,y,radius,spin=0.20)
+    if boost<0.5:
+        label(draw,360,907,'STATOR',GREEN,'MENGARAHKAN OLI')
+    else:
+        draw.line((58,980,662,890),fill=(203,211,197,180),width=5)
+        car(image,176,768,380,time*2,False)
+        centered(draw,(360,1005),'TARIKAN AWAL LEBIH KUAT',26,WHITE,'bold')
+
+
+def visual_lockup(image,time,scene):
+    draw=canvas(image)
+    start=cue_start(scene,'kopling pengunci',scene.duration*0.3)
+    close=ease((time-start+0.25)/1.2)
+    left=190+75*close;right=530-75*close
+    impeller_spin=time*0.85
+    turbine_spin=time*(0.55+0.30*close)
+    mesh(image,geometry.rotor('impeller'),left,604,150,spin=impeller_spin)
+    mesh(image,geometry.rotor('turbine'),right,604,150,spin=turbine_spin)
+    if close>0.03:
+        size=76+18*close
+        mesh(image,geometry.clutch(),360,604,size,spin=impeller_spin)
+        label(draw,360,864,'KOPLING PENGUNCI',YELLOW)
+    if close>0.9:
+        centered(draw,(360,952),'SELIP BERKURANG',25,WHITE,'bold')
 
 
 def visual_outro(image,time,scene):
     draw=canvas(image)
-    orbit(draw,360,495,134,139,time,YELLOW)
-    converter_shell(image,360,495,105,time)
-    capsule(draw,(360,670),'MESIN  >  TORCON  >  TRANSMISI',YELLOW,INK,20,19,42)
-    cityscape(image,time,1.0)
-    road(draw,935,time)
-    for n in range(5):
-        x=(120+n*103-time*130)%600
-        y=774+n*23
-        draw.line((x-70,y,x,y),fill=(169,218,218,36+n*6),width=3)
-    car(image,102+8*math.sin(time*0.8),735,515,time)
-    ending=cue_start(scene,'Menarik, kan?',scene.duration*0.8)
-    text='MENARIK, KAN?' if time>=ending else 'MELAJU LEBIH HALUS'
-    centered(draw,(360,985),text,'display',37,YELLOW if time>=ending else WHITE)
+    move=cue_start(scene,'yang bikin mobil matik',scene.duration*0.55)
+    if time<move:
+        shadow(draw,360,927,205)
+        shell(image,360,602,220)
+        label(draw,360,905,'TORQUE CONVERTER',YELLOW)
+    else:
+        city(image,time,True)
+        x=45+120*ease((time-move)/3)
+        car(image,x,615,570,time*2,False)
 
 
-VISUALS={
-    'intro':visual_intro,
-    'connection':visual_connection,
-    'parts':visual_parts,
-    'flow':visual_flow,
-    'idle':visual_idle,
-    'stator':visual_stator,
-    'lockup':visual_lockup,
-    'outro':visual_outro,
-}
+VISUALS={'intro':visual_intro,'connection':visual_connection,'parts':visual_parts,
+         'flow':visual_flow,'idle':visual_idle,'stator':visual_stator,
+         'lockup':visual_lockup,'outro':visual_outro}
 
 
-def scene_image(scene: TimedScene, time: float) -> Image.Image:
-    image=background().copy()
-    ambience(image,time)
+def scene_image(scene: TimedScene,time: float):
+    image=background(scene_style(scene,time)).copy()
     VISUALS[scene.scene.visual](image,time,scene)
-    header(image,scene,time)
     return image
 
 
@@ -738,7 +421,7 @@ def cached_cues(scene: TimedScene):
     return caption_cues(scene)
 
 
-def caption(image: Image.Image, scene: TimedScene, absolute_time: float):
+def caption(image: Image.Image,scene: TimedScene,absolute_time: float):
     current=None
     for start,end,text in cached_cues(scene):
         if start<=absolute_time<end:
@@ -748,16 +431,13 @@ def caption(image: Image.Image, scene: TimedScene, absolute_time: float):
         return
     start,end,phrase=current
     draw=canvas(image)
-    face=fitted_font(draw,phrase,'bold',38,590)
+    face=fitted_font(draw,phrase,'body',42,620)
     width=draw.textlength(phrase,font=face)
     left=(WIDTH-width)/2
-    draw.rounded_rectangle((left-23,1086,left+width+23,1156),radius=18,
-                           fill=(4,18,26,230),outline=(193,224,214,65),width=2)
     words=phrase.split(' ')
     weights=[max(1,len(word.strip(',.!?'))) for word in words]
     position=clamp((absolute_time-start)/max(0.01,end-start))*sum(weights)
-    active=len(words)-1
-    total=0
+    active=len(words)-1;total=0
     for i,weight in enumerate(weights):
         total+=weight
         if position<=total:
@@ -765,8 +445,7 @@ def caption(image: Image.Image, scene: TimedScene, absolute_time: float):
             break
     space=draw.textlength(' ',font=face)
     for i,word in enumerate(words):
-        color=YELLOW if i==active else WHITE
-        draw.text((left+1,1100),word,font=face,fill=(0,0,0,255),stroke_width=3,
-                  stroke_fill=(0,0,0,255))
-        draw.text((left,1098),word,font=face,fill=(*color,255))
+        color=WHITE if i==active else (184,196,195)
+        draw.text((left,129),word,font=face,fill=(*color,255),stroke_width=2,
+                  stroke_fill=(9,18,23,230))
         left+=draw.textlength(word,font=face)+space
